@@ -1,0 +1,339 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// pr.go adds GitHub pull request review: check out a PR's full source tree
+// into a throwaway git worktree, diff it against the merge-base with its
+// target branch instead of HEAD, and let the reviewer leave draft comments
+// and submit a review (approve / request changes / comment) from px0.
+//
+// Nothing here persists past the process. px0's "stateless on disk" tenet
+// (docs/agents/README.md) rules out a cache directory under ~/.px0, and the
+// one-PR-per-process model means there is nothing to gain from one anyway:
+// the worktree lives in a system temp dir and is removed in prSession.Close,
+// called from main() right where lsp.Close()/agent.Close() already run.
+
+var prURLRe = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/pull/(\d+)`)
+var originGitHubRe = regexp.MustCompile(`github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$`)
+
+// isGitHubPRURL is used by main.go to decide whether a bare CLI argument
+// (with no "pr" subcommand) should be treated as a PR target.
+func isGitHubPRURL(s string) bool { return prURLRe.MatchString(strings.TrimSpace(s)) }
+
+// parsePRTarget resolves a CLI argument to an owner/repo/number triple. A
+// full github.com PR URL is self-contained; a bare number is resolved
+// against cwd's "origin" remote.
+func parsePRTarget(arg, cwd string) (owner, repo string, num int, err error) {
+	arg = strings.TrimSpace(arg)
+	if m := prURLRe.FindStringSubmatch(arg); m != nil {
+		n, _ := strconv.Atoi(m[3])
+		return m[1], strings.TrimSuffix(m[2], ".git"), n, nil
+	}
+	n, convErr := strconv.Atoi(arg)
+	if convErr != nil || n <= 0 {
+		return "", "", 0, fmt.Errorf("not a PR number or github.com pull request URL: %q", arg)
+	}
+	out, err := exec.Command("git", "-C", cwd, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return "", "", 0, fmt.Errorf("px0 pr %d: no github.com PR URL given and no 'origin' remote in %s", n, cwd)
+	}
+	m := originGitHubRe.FindStringSubmatch(strings.TrimSpace(string(out)))
+	if m == nil {
+		return "", "", 0, fmt.Errorf("px0 pr %d: origin remote %q is not a github.com repository", n, strings.TrimSpace(string(out)))
+	}
+	return m[1], m[2], n, nil
+}
+
+// prSession is one checked-out PR review. Draft comments live only in
+// memory (mu-guarded), same lifetime as an agentJob -- never written to
+// disk, never surviving a restart.
+type prSession struct {
+	mu sync.Mutex
+
+	owner, repo string
+	meta        prMeta
+	token       string
+	writeAccess bool
+	diffBase    string // merge-base(head, base branch), or "HEAD" if the base couldn't be resolved
+
+	worktree string // temp checkout, removed in Close
+	srcRepo  string // the repo the worktree was registered against ("" for a plain clone)
+
+	comments []prComment
+	nextID   int64
+}
+
+// checkoutPR fetches a PR's head ref and checks it out into a system temp
+// directory: a git worktree of cwd's origin when cwd is already a clone of
+// the same repo (the common case -- `px0 pr 123` run inside the repo), or a
+// shallow single-branch clone of the PR head otherwise (a bare URL, or a
+// fork PR opened from an unrelated directory).
+func checkoutPR(ctx context.Context, owner, repo string, num int, cwd string) (*prSession, error) {
+	cfg := readSettings()
+	token, _ := resolveGitHubToken(cfg)
+
+	meta, err := fetchPRMeta(ctx, owner, repo, num, token)
+	if err != nil {
+		return nil, err
+	}
+
+	tmp, err := os.MkdirTemp("", "px0-pr-*")
+	if err != nil {
+		return nil, err
+	}
+	cleanup := func() { os.RemoveAll(tmp) }
+
+	srcRepo := ""
+	if info := gitProbe(cwd); info.ok {
+		if originURL, err := exec.Command("git", "-C", info.toplevel, "remote", "get-url", "origin").Output(); err == nil {
+			if m := originGitHubRe.FindStringSubmatch(strings.TrimSpace(string(originURL))); m != nil &&
+				strings.EqualFold(m[1], owner) && strings.EqualFold(m[2], repo) {
+				srcRepo = info.toplevel
+			}
+		}
+	}
+
+	if srcRepo != "" {
+		headRefspec := fmt.Sprintf("refs/pull/%d/head:refs/px0/pr/%d", num, num)
+		if out, err := exec.Command("git", "-C", srcRepo, "fetch", "--no-tags", "origin", headRefspec).CombinedOutput(); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("git fetch PR head: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		if out, err := exec.Command("git", "-C", srcRepo, "worktree", "add", "--detach", tmp, fmt.Sprintf("refs/px0/pr/%d", num)).CombinedOutput(); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	} else {
+		cloneURL := meta.HeadRepoCloneURL
+		if cloneURL == "" {
+			cloneURL = fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+		}
+		if out, err := exec.Command("git", "clone", "--filter=blob:none", "--branch", meta.HeadRef, "--single-branch", cloneURL, tmp).CombinedOutput(); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("git clone PR head: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+
+	// Best-effort: fetch the base branch and compute a merge-base so review
+	// diffs show exactly what the PR changes rather than the head's full
+	// HEAD diff. If this fails (e.g. base branch was force-pushed away),
+	// fall back to HEAD -- still correct for the PR head's own worktree.
+	diffBase := "HEAD"
+	baseRefspec := fmt.Sprintf("refs/heads/%s:refs/px0/base/%d", meta.BaseRef, num)
+	if _, err := exec.Command("git", "-C", tmp, "fetch", "--no-tags", "origin", baseRefspec).CombinedOutput(); err == nil {
+		if mb := gitMergeBase(tmp, "HEAD", fmt.Sprintf("refs/px0/base/%d", num)); mb != "" {
+			diffBase = mb
+		}
+	}
+
+	writeAccess := checkPushAccess(ctx, owner, repo, token)
+
+	return &prSession{
+		owner: owner, repo: repo, meta: meta, token: token,
+		writeAccess: writeAccess, diffBase: diffBase,
+		worktree: tmp, srcRepo: srcRepo,
+	}, nil
+}
+
+func (p *prSession) Root() string { return p.worktree }
+
+// Close removes the worktree registration (if any) and the temp checkout.
+// Safe on a nil receiver, matching agentManager.Close's pattern in main.go.
+func (p *prSession) Close() {
+	if p == nil {
+		return
+	}
+	if p.srcRepo != "" {
+		exec.Command("git", "-C", p.srcRepo, "worktree", "remove", "--force", p.worktree).Run()
+	}
+	os.RemoveAll(p.worktree)
+}
+
+// ---------------------------------------------------------------- HTTP
+
+func (s *Server) prOrFail(w http.ResponseWriter) bool {
+	if s.pr == nil {
+		fail(w, http.StatusNotFound, "not a PR review session")
+		return false
+	}
+	return true
+}
+
+func (s *Server) handlePRMeta(w http.ResponseWriter, r *http.Request) {
+	if !s.prOrFail(w) {
+		return
+	}
+	p := s.pr
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	writeJSON(w, map[string]any{
+		"number":      p.meta.Number,
+		"title":       p.meta.Title,
+		"author":      p.meta.Author,
+		"draft":       p.meta.Draft,
+		"base":        p.meta.BaseRef,
+		"head":        p.meta.HeadRef,
+		"owner":       p.owner,
+		"repo":        p.repo,
+		"writeAccess": p.writeAccess,
+		"readOnly":    p.token == "",
+		"draftCount":  len(p.comments),
+	})
+}
+
+func (s *Server) handlePRComments(w http.ResponseWriter, r *http.Request) {
+	if !s.prOrFail(w) {
+		return
+	}
+	p := s.pr
+	switch r.Method {
+	case http.MethodGet:
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		comments := p.comments
+		if comments == nil {
+			comments = []prComment{}
+		}
+		writeJSON(w, map[string]any{"comments": comments})
+	case http.MethodPost:
+		if !localPost(w, r) {
+			return
+		}
+		if p.token == "" {
+			fail(w, http.StatusForbidden, "no GitHub token configured; PR review is read-only")
+			return
+		}
+		var body struct {
+			Path string `json:"path"`
+			Line int    `json:"line"`
+			Side string `json:"side"`
+			Body string `json:"body"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil ||
+			body.Path == "" || body.Line <= 0 || strings.TrimSpace(body.Body) == "" {
+			fail(w, http.StatusBadRequest, "path, line, and body are required")
+			return
+		}
+		side := strings.ToUpper(body.Side)
+		if side != "LEFT" {
+			side = "RIGHT"
+		}
+		p.mu.Lock()
+		p.nextID++
+		c := prComment{ID: p.nextID, Path: body.Path, Line: body.Line, Side: side, Body: strings.TrimSpace(body.Body)}
+		p.comments = append(p.comments, c)
+		p.mu.Unlock()
+		writeJSON(w, c)
+	default:
+		fail(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handlePRCommentDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.prOrFail(w) {
+		return
+	}
+	if !localPost(w, r) {
+		return
+	}
+	id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	p := s.pr
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, c := range p.comments {
+		if c.ID == id {
+			p.comments = append(p.comments[:i], p.comments[i+1:]...)
+			break
+		}
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePRSubmit(w http.ResponseWriter, r *http.Request) {
+	if !s.prOrFail(w) {
+		return
+	}
+	if !localPost(w, r) {
+		return
+	}
+	p := s.pr
+	if p.token == "" {
+		fail(w, http.StatusForbidden, "no GitHub token configured; PR review is read-only")
+		return
+	}
+	var body struct {
+		Event string `json:"event"`
+		Body  string `json:"body"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+		fail(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	event := strings.ToUpper(body.Event)
+	if event != "APPROVE" && event != "REQUEST_CHANGES" && event != "COMMENT" {
+		fail(w, http.StatusBadRequest, "event must be APPROVE, REQUEST_CHANGES, or COMMENT")
+		return
+	}
+	if (event == "APPROVE" || event == "REQUEST_CHANGES") && !p.writeAccess {
+		fail(w, http.StatusForbidden, "no push access on this repository; only Comment reviews are allowed")
+		return
+	}
+	p.mu.Lock()
+	comments := append([]prComment(nil), p.comments...)
+	p.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := submitReview(ctx, p.owner, p.repo, p.meta.Number, p.token, comments, event, body.Body); err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	p.mu.Lock()
+	p.comments = nil
+	p.mu.Unlock()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleLaunchPR lets an already-running px0 open another PR without
+// disturbing its own session: it re-execs itself as a brand new process on
+// a new port, the same as "px0 pr <target>" from the terminal. The call
+// returns as soon as the child starts; the child opens its own browser tab
+// through the same path any px0 invocation does (main.go's openBrowser).
+func (s *Server) handleLaunchPR(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	var body struct {
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil || strings.TrimSpace(body.Target) == "" {
+		fail(w, http.StatusBadRequest, "target is required")
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	cmd := exec.Command(exe, "pr", strings.TrimSpace(body.Target))
+	cmd.Dir = s.ix.Root()
+	if err := cmd.Start(); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	go cmd.Wait() // reap without blocking the handler
+	writeJSON(w, map[string]any{"ok": true})
+}

@@ -80,13 +80,55 @@ func main() {
 		}
 	}
 
+	// A "pr" subcommand, or a bare github.com pull request URL, checks out
+	// the PR's full source tree instead of resolving a local file/directory.
 	target := "."
+	var prOwner, prRepo string
+	var prNum int
+	isPR := false
 	if flag.NArg() > 0 {
-		target = flag.Arg(0)
+		switch {
+		case flag.Arg(0) == "pr":
+			if flag.NArg() < 2 {
+				fatal(fmt.Errorf("usage: px0 pr <number-or-url>"))
+			}
+			owner, repo, num, err := parsePRTarget(flag.Arg(1), ".")
+			if err != nil {
+				fatal(err)
+			}
+			prOwner, prRepo, prNum, isPR = owner, repo, num, true
+		case isGitHubPRURL(flag.Arg(0)):
+			owner, repo, num, err := parsePRTarget(flag.Arg(0), ".")
+			if err != nil {
+				fatal(err)
+			}
+			prOwner, prRepo, prNum, isPR = owner, repo, num, true
+		default:
+			target = flag.Arg(0)
+		}
 	}
-	root, initialFile, initialLine, err := resolveTarget(target)
-	if err != nil {
-		fatal(err)
+	if isPR && gitDisabled {
+		fatal(fmt.Errorf("px0 pr: git is required for PR review; remove -no-git"))
+	}
+
+	var pr *prSession
+	var root, initialFile string
+	var initialLine int
+	if isPR {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		p, err := checkoutPR(ctx, prOwner, prRepo, prNum, ".")
+		cancel()
+		if err != nil {
+			fatal(fmt.Errorf("px0 pr: %w", err))
+		}
+		pr = p
+		root = p.Root()
+	} else {
+		r, f, l, err := resolveTarget(target)
+		if err != nil {
+			fatal(err)
+		}
+		root, initialFile, initialLine = r, f, l
 	}
 
 	ln, addr, err := listen(*host, *port)
@@ -100,6 +142,9 @@ func main() {
 	defer tel.Close("normal")
 
 	pxSrv := NewServer(ix, lsp)
+	if pr != nil {
+		pxSrv.SetPR(pr)
+	}
 	var agent *agentManager
 	if !*noAgent {
 		agent, err = newAgentManager(root, *agentCmd, lsp)
@@ -113,6 +158,9 @@ func main() {
 
 	url := viewerURL(addr, initialFile, initialLine)
 	uiHeading("px0 "+version, nil, os.Stdout)
+	if pr != nil {
+		uiKV("PR", fmt.Sprintf("#%d %s", pr.meta.Number, pr.meta.Title), 11, os.Stdout)
+	}
 	uiKV("workspace", root, 11, os.Stdout)
 	uiKV("url", uiAccent(url, os.Stdout), 11, os.Stdout)
 	uiHint("ctrl-c to stop", os.Stdout)
@@ -179,6 +227,7 @@ func main() {
 	err = srv.Serve(ln)
 	lsp.Close()
 	agent.Close()
+	pr.Close()
 
 	if interrupted {
 		tel.Close("interrupted")

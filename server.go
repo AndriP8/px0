@@ -44,6 +44,8 @@ type Server struct {
 	ix         *Index
 	lsp        *lspManager
 	agent      *agentManager // nil unless main wires editing for this session
+	pr         *prSession    // nil unless main launched this process as `px0 pr ...`
+	diffBase   string        // ref /api/diff and /api/gutter diff against; "HEAD" unless in PR mode
 	gitWatcher *GitWatcher
 	mux        *http.ServeMux
 
@@ -54,7 +56,7 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	if lsp == nil {
 		lsp = newLSPManager(ix.Root(), false)
 	}
-	s := &Server{ix: ix, lsp: lsp, mux: http.NewServeMux()}
+	s := &Server{ix: ix, lsp: lsp, diffBase: "HEAD", mux: http.NewServeMux()}
 	s.gitWatcher = NewGitWatcher(ix)
 	s.gitWatcher.Start(context.Background())
 	sub, _ := fs.Sub(assets, "web")
@@ -94,6 +96,11 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/agent/job", s.handleAgentJob)
 	s.mux.HandleFunc("/api/agent/cancel", s.handleAgentCancel)
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
+	s.mux.HandleFunc("/api/pr/meta", s.handlePRMeta)
+	s.mux.HandleFunc("/api/pr/comments", s.handlePRComments)
+	s.mux.HandleFunc("/api/pr/comments/delete", s.handlePRCommentDelete)
+	s.mux.HandleFunc("/api/pr/submit", s.handlePRSubmit)
+	s.mux.HandleFunc("/api/pr/launch", s.handleLaunchPR)
 	s.lastReq.Store(time.Now().UnixNano())
 	go s.scavenge()
 	return s
@@ -295,6 +302,16 @@ func (s *Server) SetAgent(a *agentManager) {
 	}
 }
 
+// SetPR marks this process as a PR review session: diffs are computed
+// against the PR's merge-base instead of HEAD, and the /api/pr/* endpoints
+// become live. Unset (nil) for a normal workspace.
+func (s *Server) SetPR(p *prSession) {
+	s.pr = p
+	if p != nil {
+		s.diffBase = p.diffBase
+	}
+}
+
 // agentHarnesses is the picker's list, empty when editing is unavailable.
 func (s *Server) agentHarnesses() []agentHarness {
 	if s.agent == nil {
@@ -343,7 +360,7 @@ func (s *Server) handleThemes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	n, at, ms := s.ix.Stats()
 	gitCount, gitFiles := s.ix.GitChanges()
-	writeJSON(w, map[string]any{
+	meta := map[string]any{
 		"root":        s.ix.Root(),
 		"name":        filepath.Base(s.ix.Root()),
 		"files":       n,
@@ -360,7 +377,23 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"agentModel":  s.agent.Model(),
 		"agentPinned": s.agent.Pinned(),
 		"agents":      []agentHarness{},
-	})
+	}
+	if s.pr != nil {
+		p := s.pr
+		p.mu.Lock()
+		meta["pr"] = map[string]any{
+			"number":      p.meta.Number,
+			"title":       p.meta.Title,
+			"author":      p.meta.Author,
+			"base":        p.meta.BaseRef,
+			"head":        p.meta.HeadRef,
+			"writeAccess": p.writeAccess,
+			"readOnly":    p.token == "",
+			"draftCount":  len(p.comments),
+		}
+		p.mu.Unlock()
+	}
+	writeJSON(w, meta)
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -701,7 +734,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "bad path")
 		return
 	}
-	diff := gitDiff(s.ix.Root(), rel)
+	diff := gitDiffAgainst(s.ix.Root(), rel, s.diffBase)
 	if uiVerbose {
 		status := "clean"
 		if diff != "" {
@@ -722,7 +755,7 @@ func (s *Server) handleGutter(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "bad path")
 		return
 	}
-	added, modified, deleted := gitHunks(s.ix.Root(), rel)
+	added, modified, deleted := gitHunksAgainst(s.ix.Root(), rel, s.diffBase)
 	nz := func(v []int) []int { // marshal as [] not null
 		if v == nil {
 			return []int{}
@@ -1042,4 +1075,3 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, 405, "method not allowed")
 	}
 }
-

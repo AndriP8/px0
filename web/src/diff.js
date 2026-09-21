@@ -120,7 +120,14 @@ function renderDiff(d) {
   }
   diffContent.append(frag);
   syncDiffAgentTargets();
+  if (prSyncHandler) prSyncHandler();
 }
+
+/* One-way registration for pr.js, mirroring agent.js's hook into selbar.js:
+   diff.js never imports pr.js, it just calls this after every repaint when a
+   PR review session has set it. */
+let prSyncHandler = null;
+export function setPRSyncHandler(fn) { prSyncHandler = fn; }
 
 export function syncDiffAgentTargets() {
   if (!diffview || diffview.hidden) return;

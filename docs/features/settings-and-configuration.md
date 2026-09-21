@@ -52,6 +52,7 @@ px0 stores all configuration in a single per-user global file (`~/.px0/settings.
 | `lsp.hover.enabled` | LSP | `true` | `true`, `false` | Hover documentation cards |
 | `agent.harness` | Coding Agent | `""` | `claude`, `gemini`, `agy`, etc. | Preferred CLI coding harness |
 | `agent.timeoutSeconds` | Coding Agent | `120` | `10` – `600` (seconds) | Max runtime for agent edits |
+| `github.token` | GitHub | `""` | any string | Personal access token for `px0 pr` review; takes precedence over `GITHUB_TOKEN` and `gh auth token`. Masked in the Settings UI. |
 
 ---
 

@@ -45,6 +45,25 @@
 
   <!-- SECTION: Main Editor Area -->
   <main id="main">
+    <!-- PR review bar: shown only when this session is `px0 pr ...` (web/src/pr.js) -->
+    <div id="pr-bar" class="pr-bar" hidden>
+      <div class="pr-bar-row">
+        <span id="pr-badge" class="pr-badge"></span>
+        <span id="pr-title" class="pr-title"></span>
+        <span id="pr-refs" class="pr-refs"></span>
+        <span class="grow"></span>
+        <span id="pr-readonly-note" class="pr-readonly-note" hidden>Read-only &middot; no GitHub token configured</span>
+        <span id="pr-draft-count" class="pr-draft-count"></span>
+      </div>
+      <div class="pr-bar-row pr-review-row">
+        <textarea id="pr-review-body" class="pr-review-body" rows="1" spellcheck="false" autocomplete="off" placeholder="Leave an overall review comment (optional)..."></textarea>
+        <button id="pr-submit-comment" class="footer-btn" title="Submit as a plain comment, no verdict">Comment</button>
+        <button id="pr-submit-request-changes" class="footer-btn" hidden title="Request changes on this PR">Request Changes</button>
+        <button id="pr-submit-approve" class="footer-btn" hidden title="Approve this PR">Approve</button>
+      </div>
+    </div>
+    <!-- Draft review comment composers, one .agent-box per open composer -->
+    <div id="pr-comment-list" class="agentbox-list" hidden></div>
     <!-- File Tabs -->
     <div id="tabs"></div>
     <!-- View-mode switches, pinned to the right of the tab bar -->

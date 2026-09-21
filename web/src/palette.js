@@ -15,6 +15,7 @@ import { listThemes, currentTheme, setTheme, cycleTheme } from './theme.js';
 import { togglePreview } from './markdown.js';
 import { openSettings } from './settings.js';
 import { showVimHelp, isVimEnabled, setVimModeEnabled } from './vim.js';
+import { launchPR } from './pr.js';
 
 export const overlay = $('#overlay');
 export const palInput = $('#pal');
@@ -48,6 +49,7 @@ export const COMMANDS = [
   { name: 'Close Tab', run: () => { if (S.active >= 0) closeTab(S.active); } },
   { name: 'Close All Tabs', run: () => { while (S.tabs.length) closeTab(0); } },
   { name: withKeys('Reopen Closed Tab ({Alt+Shift+T})'), run: () => reopenClosedTab() },
+  { name: 'Git: Open Pull Request…', run: () => openPalette('openpr', '') },
   { name: 'Preferences: Toggle Vim Keybindings', run: () => setVimModeEnabled(!isVimEnabled(), true) },
   { name: 'Help: Vim Keybindings Cheat Sheet', run: showVimHelp },
   { name: 'Keyboard Shortcuts', run: showHelp },
@@ -59,6 +61,7 @@ export const PAL_MODES = {
   line: { tag: 'Line', hint: 'Enter a line number.' },
   command: { tag: 'Command', hint: '' },
   theme: { tag: 'Theme', hint: 'Arrows preview a theme. Enter keeps it, Esc restores the previous one.' },
+  openpr: { tag: 'Open PR', hint: 'PR number or github.com pull request URL, then Enter.' },
 };
 
 export function openPalette(mode, seed) {
@@ -81,8 +84,11 @@ export function closePalette() {
 export const refreshPalette = debounce(async () => {
   if (!pal) return;
   let raw = palInput.value;
-  let mode = pal.mode === 'theme' ? 'theme' : 'file';
-  if (mode === 'theme') { /* no prefixes: the query is a theme name */ }
+  // theme and openpr have no prefix character: once entered (via a command),
+  // they stay put regardless of what's typed, unlike file/symbol/line/command
+  // which re-derive their mode from the input on every keystroke.
+  let mode = (pal.mode === 'theme' || pal.mode === 'openpr') ? pal.mode : 'file';
+  if (mode === 'theme' || mode === 'openpr') { /* no prefixes: the query is the value itself */ }
   else if (raw.startsWith('>')) { mode = 'command'; raw = raw.slice(1); }
   else if (raw.startsWith('@')) { mode = 'symbol'; raw = raw.slice(1); }
   else if (raw.startsWith(':')) { mode = 'line'; raw = raw.slice(1); }
@@ -108,6 +114,8 @@ export const refreshPalette = debounce(async () => {
     const lq = q.toLowerCase();
     pal.items = listThemes().filter(t => (t.name + ' ' + t.id).toLowerCase().includes(lq))
       .map(t => ({ kind: 'theme', id: t.id, label: t.name, sub: t.scheme, right: t.id === pal.restoreTheme ? 'current' : '' }));
+  } else if (mode === 'openpr') {
+    pal.items = q ? [{ kind: 'openpr', target: q, label: 'Open PR: ' + esc(q), sub: 'Enter to open in a new tab', raw: true }] : [];
   } else {
     let j;
     try { j = await api('/api/find', { q, limit: 120 }); } catch { return; }
@@ -168,6 +176,7 @@ export function acceptPalette() {
     d.cur = it.n; centerLine(it.n); render(); updateStatus(); pushHistory(d.path, it.n);
   } else if (it.kind === 'cmd') it.cmd.run();
   else if (it.kind === 'theme') setTheme(it.id);
+  else if (it.kind === 'openpr') launchPR(it.target);
 }
 
 export function initPalette() {

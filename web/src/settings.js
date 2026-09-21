@@ -626,7 +626,8 @@ function renderSettingsList() {
           ${presetPills}
         </div>`;
     } else {
-      controlHtml = `<input type="text" class="settings-input" data-key="${esc(key)}" value="${esc(String(val || ''))}">`;
+      const isSecret = item.secret || item.Secret;
+      controlHtml = `<input type="${isSecret ? 'password' : 'text'}" class="settings-input" data-key="${esc(key)}" value="${esc(String(val || ''))}"${isSecret ? ' autocomplete="off"' : ''}>`;
       let stringPresets = [];
       if (key === 'agent.harness') {
         stringPresets = ['claude', 'gemini', 'cursor-agent', 'agy', 'aider'];

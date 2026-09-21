@@ -1783,3 +1783,38 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
   tab-size: 2;
 }
 
+/* ---------- PR review (web/src/pr.js) ---------- */
+.pr-bar {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 6px 12px; background: var(--bg2); border-bottom: 1px solid var(--line);
+}
+.pr-bar[hidden] { display: none; }
+.pr-bar-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pr-badge {
+  font: 600 11px var(--mono); color: var(--accent-fg); background: var(--bg4);
+  border-radius: 3px; padding: 1px 6px; flex: none;
+}
+.pr-title {
+  font: 12px var(--ui); color: var(--fg); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.pr-refs { font: 11px var(--mono); color: var(--faint); flex: none; }
+.pr-readonly-note { font: 11px var(--ui); color: var(--faint); flex: none; }
+.pr-draft-count { font: 11px var(--ui); color: var(--accent-fg); flex: none; }
+.pr-review-row { gap: 6px; }
+.pr-review-body {
+  flex: 1; min-width: 0; resize: none; height: 26px; padding: 4px 8px;
+  font: 12px var(--mono); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 4px; outline: none;
+}
+.pr-review-body:focus { border-color: var(--accent); }
+#pr-comment-list[hidden] { display: none; }
+#pr-comment-list {
+  padding: 8px 12px; background: var(--bg2); border-bottom: 1px solid var(--line);
+  max-height: 40vh; overflow-y: auto;
+}
+.pr-has-comment { position: relative; }
+.pr-comment-mark {
+  display: inline-block; margin-right: 4px; font-size: 11px; cursor: help; flex: none;
+}
+

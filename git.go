@@ -159,23 +159,45 @@ func mapXY(xy string) string {
 // gitDiff returns the unified diff of relpath against HEAD. relpath is relative
 // to the served root; git resolves it against -C root. Fails quiet -> "".
 func gitDiff(root, relpath string) string {
+	return gitDiffAgainst(root, relpath, "HEAD")
+}
+
+// gitDiffAgainst is gitDiff generalized to an arbitrary base ref, so a PR
+// review session (pr.go) can diff a file against the merge-base with the
+// PR's target branch instead of the working tree's HEAD.
+func gitDiffAgainst(root, relpath, base string) string {
 	if !gitAvailable(root) {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", root, "diff", "--no-color", "HEAD", "--", relpath).Output()
+	out, err := exec.Command("git", "-C", root, "diff", "--no-color", base, "--", relpath).Output()
 	if err != nil {
 		return ""
 	}
 	return string(out)
 }
 
-// gitHunks parses the unified diff of relpath against HEAD into 1-based
-// NEW-FILE line numbers for a change gutter: added lines, modified (replaced)
-// lines, and one marker per pure-deletion run (the new-file line immediately
-// preceding the removed run; 0 means "before the first line"). Fails quiet:
-// empty when git is off/unavailable or the file has no diff (clean/untracked).
-func gitHunks(root, relpath string) (added, modified, deleted []int) {
-	diff := gitDiff(root, relpath)
+// gitMergeBase returns the merge-base commit of a and b, or "" if it cannot
+// be determined (e.g. b was never fetched locally).
+func gitMergeBase(root, a, b string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "merge-base", a, b).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitHunksAgainst parses the unified diff of relpath against base into
+// 1-based NEW-FILE line numbers for a change gutter: added lines, modified
+// (replaced) lines, and one marker per pure-deletion run (the new-file line
+// immediately preceding the removed run; 0 means "before the first line").
+// Fails quiet: empty when git is off/unavailable or the file has no diff
+// against base (clean/untracked). base is "HEAD" for the working-tree
+// gutter, or a PR's merge-base in review mode (server.go's diffBase).
+func gitHunksAgainst(root, relpath, base string) (added, modified, deleted []int) {
+	diff := gitDiffAgainst(root, relpath, base)
 	if diff == "" {
 		return nil, nil, nil
 	}

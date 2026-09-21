@@ -23,6 +23,7 @@ import { initSettings } from './settings.js';
 import { initVim } from './vim.js';
 import { initImageViewer } from './imageview.js';
 import { initGitStream } from './gitstream.js';
+import { initPR } from './pr.js';
 
 // Initialize all subsystems
 initRenderer();
@@ -76,6 +77,7 @@ initImageViewer();
   if (S.meta.metrics) updateMetricsDisplay(S.meta.metrics);
   updateSidebarToggleState();
   applyAgentMeta();
+  initPR();
   document.title = S.meta.name + ' - px0';
   $('#root-name').textContent = S.meta.name;
   $('#root-name').title = S.meta.root;

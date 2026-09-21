@@ -29,6 +29,7 @@ type settings struct {
 	DiffEditorRenderSideBySide *bool    `json:"diffEditor.renderSideBySide,omitempty"`
 	MarkdownPreviewOpen        *bool    `json:"markdown.preview.open,omitempty"`
 	TelemetryEnabled           *bool    `json:"telemetry.enabled,omitempty"`
+	GitHubToken                *string  `json:"github.token,omitempty"`
 }
 
 var settingsMu sync.Mutex
@@ -57,6 +58,7 @@ type settingSchemaItem struct {
 	Min         *float64 `json:"min,omitempty"`
 	Max         *float64 `json:"max,omitempty"`
 	Step        *float64 `json:"step,omitempty"`
+	Secret      bool     `json:"secret,omitempty"` // render as a masked input; still returned in plaintext by /api/settings, same trust model as every other local setting
 }
 
 func numPtr(v float64) *float64 { return &v }
@@ -327,6 +329,15 @@ var settingsSchema = []settingSchemaItem{
 		Category:    "Agent / AI",
 		Type:        "boolean",
 		Default:     false,
+	},
+	{
+		Key:         "github.token",
+		Title:       "GitHub Token",
+		Description: "Personal access token used to check out and review pull requests (px0 pr). Takes precedence over the GITHUB_TOKEN environment variable and 'gh auth token'.",
+		Category:    "GitHub",
+		Type:        "string",
+		Default:     "",
+		Secret:      true,
 	},
 }
 
