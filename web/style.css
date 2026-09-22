@@ -181,7 +181,7 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 /* ---------- git panel (sidebar: stage/commit/push/pull) ---------- */
 .git-panel {
   flex: none; display: flex; flex-direction: column;
-  height: 150px; min-height: 30px; max-height: 60vh;
+  height: 280px; min-height: 30px; max-height: 70vh;
   position: relative; background: var(--bg2); border-top: 1px solid var(--line);
 }
 .git-panel[hidden] { display: none; }
@@ -206,25 +206,29 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 }
 .git-commit-msg:focus { border-color: var(--accent); }
 .git-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.git-panel-actions .footer-btn,
-.git-generate-btn {
+.git-panel-actions .footer-btn {
   border: 1px solid var(--line); background: var(--bg3); border-radius: 4px;
   height: 24px; padding: 3px 8px; opacity: 1;
 }
-.git-panel-actions .footer-btn:hover:not(:disabled),
-.git-generate-btn:hover:not(:disabled) {
+.git-panel-actions .footer-btn:hover:not(:disabled) {
   border-color: var(--accent); background: var(--bg4);
 }
-.git-panel-actions .footer-btn:disabled,
-.git-generate-btn:disabled { opacity: .5; cursor: default; }
+.git-panel-actions .footer-btn:disabled { opacity: .5; cursor: default; }
 .git-panel-actions .footer-btn { flex: 1 1 auto; justify-content: center; }
 
 /* Harness/model pickers stacked (the sidebar is too narrow for them side by
-   side, as in the batch-edit bar), with the AI commit action right below. */
+   side, as in the batch-edit bar), with the AI commit action -- the panel's
+   primary action -- right below. */
 .git-agent-picker { display: flex; flex-direction: column; gap: 6px; }
 .git-agent-picker .agent-harness-select,
 .git-agent-picker .agent-model-select { width: 100%; max-width: none; }
-.git-generate-btn { width: 100%; justify-content: center; font-weight: 500; }
+.git-generate-btn {
+  width: 100%; justify-content: center; height: 28px;
+  border: 1px solid var(--accent); border-radius: 4px;
+  background: var(--accent); color: var(--accent-fg); font-weight: 600; opacity: 1;
+}
+.git-generate-btn:hover:not(:disabled) { opacity: .9; }
+.git-generate-btn:disabled { opacity: .5; cursor: default; }
 
 /* ---------- search panel ---------- */
 .search-form { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
