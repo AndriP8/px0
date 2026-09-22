@@ -370,15 +370,6 @@ body.md-tab.diff-tab #tabs { padding-right: 290px; }
 .tab .x { width: 15px; height: 15px; border-radius: 3px; display: grid; place-items: center; color: var(--faint); flex: none; }
 .tab .x svg { width: 9px; height: 9px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
 .tab .x:hover { background: var(--bg4); color: var(--fg); }
-.tab.git-modified .tn { color: var(--mark-mod, #d29922); }
-.tab.active.git-modified .tn { color: var(--mark-mod, #d29922); }
-.tab .tab-git-dot {
-  font-size: 7px;
-  color: var(--mark-mod, #d29922);
-  margin-left: 2px;
-  line-height: 1;
-  display: inline-block;
-}
 
 #crumbs { display: none !important; }
 
@@ -632,6 +623,11 @@ body.word-wrap .c { white-space: pre-wrap; word-break: break-word; overflow-wrap
   flex: none; width: 48px; padding: 0 10px 0 6px; text-align: right;
   color: var(--faint); user-select: none; font-variant-numeric: tabular-nums;
 }
+/* A line number doubles as "open this line in the full file" -- cursor and
+   hover color are the only cue, the pencil icon already owns the gutter's
+   hover space for comment/edit. */
+.diff-ln-nav { cursor: pointer; }
+.diff-ln-nav:hover { color: var(--fg); text-decoration: underline; }
 .diff-mk { flex: none; width: 14px; text-align: center; color: var(--faint); user-select: none; }
 .diff-code { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; padding-right: 12px; }
 .diff-row, .diff-side { display: flex; }
@@ -1953,67 +1949,6 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 }
 .pr-btn-batch-apply:hover:not(:disabled) {
   opacity: 0.9;
-}
-
-/* ---------- Line comment & inline edit popover menu ---------- */
-.line-comment-menu {
-  position: fixed;
-  z-index: 100;
-  min-width: 270px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 5px;
-  background: var(--bg3);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: var(--shadow);
-  user-select: none;
-}
-.line-comment-menu[hidden] {
-  display: none;
-}
-.line-comment-menu .sel-menu-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 7px 10px;
-  border-radius: 4px;
-  text-align: left;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: background 0.1s ease;
-}
-.line-comment-menu .sel-menu-item:hover {
-  background: var(--bg4);
-  color: var(--accent-fg);
-}
-.line-comment-menu .sel-menu-item:hover .footer-kbd {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-.menu-item-content {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.menu-item-title {
-  font: 500 12px var(--ui);
-  color: var(--fg);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.menu-item-desc {
-  font: 11px var(--ui);
-  color: var(--faint);
-  margin-left: 20px;
-}
-.menu-icon {
-  font-size: 13px;
-  line-height: 1;
 }
 
 

@@ -129,6 +129,27 @@ function renderDiff(d) {
 let prSyncHandler = null;
 export function setPRSyncHandler(fn) { prSyncHandler = fn; }
 
+/* Same one-way registration for tabs.js: diff.js knows how to leave diff mode
+   but not how to move the caret and scroll the (already open) source view to
+   a given line, so it hands the line off to whatever tabs.js registered. */
+let sourceJumpHandler = null;
+export function setSourceJumpHandler(fn) { sourceJumpHandler = fn; }
+
+// The working-tree line number of whichever diff row currently sits at the
+// top of the scrolled viewport -- what "Source" should land on so switching
+// out of diff view keeps you where you were reading, not wherever the
+// doc's cursor last happened to be.
+function currentDiffLine() {
+  if (!diffview || diffview.hidden) return null;
+  const top = diffview.getBoundingClientRect().top;
+  for (const el of diffview.querySelectorAll('[data-l], [data-at]')) {
+    if (el.getBoundingClientRect().bottom > top) {
+      return el.dataset.l !== undefined ? +el.dataset.l : +el.dataset.at;
+    }
+  }
+  return null;
+}
+
 export function syncDiffAgentTargets() {
   if (!diffview || diffview.hidden) return;
   const d = doc_();
@@ -257,6 +278,8 @@ function lineCell(n) {
   const el = document.createElement('div');
   el.className = 'diff-ln';
   if (n !== '' && n !== undefined) {
+    el.classList.add('diff-ln-nav');
+    el.title = 'Open in file view at line ' + n;
     const btn = document.createElement('span');
     btn.className = 'line-btn';
     btn.setAttribute('role', 'button');
@@ -293,7 +316,22 @@ export function initDiff() {
   // Each half of the switch names a view, so a click shows that view rather than toggling.
   $('#diff-source')?.addEventListener('click', e => {
     e.stopPropagation();
-    setDiffMode('source');
+    const line = currentDiffLine();
+    if (line && sourceJumpHandler) sourceJumpHandler(line);
+    else setDiffMode('source');
+  });
+  // Clicking a line number jumps straight to the full file at that line --
+  // the diff shows what changed, but reading it usually means seeing it in
+  // context, not just the hunk.
+  diffContent.addEventListener('click', e => {
+    if (e.target.closest('.line-btn')) return;
+    const cell = e.target.closest('.diff-ln-nav');
+    if (!cell) return;
+    const rowEl = cell.closest('[data-l], [data-at]');
+    if (!rowEl || !sourceJumpHandler) return;
+    e.stopPropagation();
+    const line = rowEl.dataset.l !== undefined ? +rowEl.dataset.l : +rowEl.dataset.at;
+    sourceJumpHandler(line);
   });
   $('#diff-btn')?.addEventListener('click', e => {
     e.stopPropagation();

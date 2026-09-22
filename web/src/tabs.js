@@ -12,7 +12,7 @@ import { clearLink } from './hover.js';
 import { clearFind } from './find.js';
 import { clearSelectAll } from './selbar.js';
 import { syncPreview, previewing, previewLine } from './markdown.js';
-import { syncDiffView, layoutPref, diffScrollTop } from './diff.js';
+import { syncDiffView, layoutPref, diffScrollTop, setDiffMode, setSourceJumpHandler } from './diff.js';
 import { syncImageView } from './imageview.js';
 
 // Recently closed files, newest last, for Alt+Shift+T.
@@ -238,6 +238,21 @@ export function centerLine(n) {
   vp.scrollTop = Math.max(0, y);
 }
 
+// Registered with diff.js (setSourceJumpHandler): leaves diff view for the
+// plain source view of the doc already open in the active tab, caret and
+// scroll landing on the given working-tree line -- what a click on a diff
+// line number, or the Source toggle, hands over.
+export function jumpToSourceLine(line) {
+  const d = doc_();
+  if (!d || !line) return;
+  setDiffMode('source');
+  d.cur = Math.max(1, Math.min(d.total || line, line));
+  centerLine(d.cur);
+  render();
+  updateStatus();
+  pushHistory(d.path, d.cur);
+}
+
 export function closeTab(i) {
   clearSelectAll();
   const [closed] = S.tabs.splice(i, 1);
@@ -298,10 +313,9 @@ export async function reopenClosedTab() {
 
 export function drawTabs() {
   $('#tabs').innerHTML = S.tabs.map((t, i) =>
-    '<div class="tab' + (i === S.active ? ' active' : '') + (t.isImage ? ' tab-image' : '') + (t.diffAvailable ? ' git-modified' : '') + '" data-i="' + i + '" title="' + esc(t.path) + '">' +
+    '<div class="tab' + (i === S.active ? ' active' : '') + (t.isImage ? ' tab-image' : '') + '" data-i="' + i + '" title="' + esc(t.path) + '">' +
     (t.isImage ? '<svg class="tab-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><circle cx="5.5" cy="5.5" r="1.5"/><path d="M14 10l-3.5-3.5L3 14"/></svg>' : '') +
     '<span class="tn">' + esc(t.name) + '</span>' +
-    (t.diffAvailable ? '<span class="tab-git-dot" title="Modified in git">●</span>' : '') +
     '<span class="x" data-close="' + i + '" title="' + withKeys('Close tab ({Alt+W})') + '"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg></span></div>').join('');
   const act = $('#tabs .tab.active');
   if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -377,6 +391,7 @@ export function hideImage() {
 }
 
 export function initTabs() {
+  setSourceJumpHandler(jumpToSourceLine);
   $('#tabs').addEventListener('click', e => {
     const x = e.target.closest('[data-close]');
     if (x) { closeTab(+x.dataset.close); return; }
