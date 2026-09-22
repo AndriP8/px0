@@ -32,7 +32,7 @@ export function initGitPanel() {
     addEventListener('mousemove', e => {
       if (!dragging) return;
       const bottom = panel().getBoundingClientRect().bottom;
-      const h = Math.max(60, Math.min(window.innerHeight * 0.7, bottom - e.clientY));
+      const h = Math.max(60, Math.min(window.innerHeight * 0.8, bottom - e.clientY));
       panel().style.height = h + 'px';
       layout(); render();
     });

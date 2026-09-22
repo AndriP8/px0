@@ -186,7 +186,7 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 /* ---------- git panel (sidebar: stage/commit/push/pull) ---------- */
 .git-panel {
   flex: none; display: flex; flex-direction: column;
-  height: 330px; min-height: 30px; max-height: 70vh;
+  height: 425px; min-height: 30px; max-height: 80vh;
   position: relative; background: var(--bg2); border-top: 1px solid var(--line);
 }
 .git-panel[hidden] { display: none; }
