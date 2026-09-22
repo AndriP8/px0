@@ -10,6 +10,7 @@ import { $, S, doc_, esc, api, apiPostJson, keyLabel, withKeys } from './state.j
 import { showToast } from './ui.js';
 import { setReviewHandler, SEL_MENU_ITEMS } from './selbar.js';
 import { diffview, setPRSyncHandler } from './diff.js';
+import { reloadWorkspace } from './agent.js';
 
 let meta = null;      // this session's PR info: {number, title, base, head, writeAccess, readOnly}
 let comments = [];    // draft comments known to the server
@@ -47,6 +48,8 @@ function renderBar() {
   if (!b || !meta) return;
   b.hidden = false;
   $('#pr-badge').textContent = '#' + meta.number;
+  const mb = $('#pr-merged-badge');
+  if (mb) mb.hidden = !meta.merged;
   $('#pr-title').textContent = meta.title;
   $('#pr-title').title = meta.title;
   $('#pr-refs').textContent = meta.base + ' ← ' + meta.head;
@@ -55,6 +58,11 @@ function renderBar() {
     : '';
   const ro = $('#pr-readonly-note');
   if (ro) ro.hidden = !meta.readOnly;
+  const batchBtn = $('#pr-batch-apply');
+  if (batchBtn) {
+    const hasApplicable = comments.some(c => c.path && c.line && c.body?.trim());
+    batchBtn.hidden = !hasApplicable;
+  }
   const reqBtn = $('#pr-submit-request-changes');
   const appBtn = $('#pr-submit-approve');
   if (reqBtn) reqBtn.hidden = !meta.writeAccess;
@@ -64,9 +72,74 @@ function renderBar() {
 }
 
 function wireBarButtons() {
+  $('#pr-batch-apply')?.addEventListener('click', batchApplyComments);
   $('#pr-submit-comment')?.addEventListener('click', () => submitReview('COMMENT'));
   $('#pr-submit-request-changes')?.addEventListener('click', () => submitReview('REQUEST_CHANGES'));
   $('#pr-submit-approve')?.addEventListener('click', () => submitReview('APPROVE'));
+}
+
+async function batchApplyComments() {
+  const applicable = comments.filter(c => c.path && c.line && c.body?.trim());
+  if (!applicable.length) {
+    showToast('!', 'No draft comments with line locations to apply');
+    return;
+  }
+  const btn = $('#pr-batch-apply');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Applying...';
+  }
+  const edits = applicable.map(c => ({
+    path: c.path,
+    l1: c.line,
+    l2: c.line,
+    instruction: c.body.trim(),
+  }));
+  try {
+    const job = await apiPostJson('/api/agent/batch', { edits });
+    showToast('⚡', `Batch applying ${edits.length} comments with ${job.harness || 'agent'}...`);
+    pollPRBatch(job.id, applicable.length);
+  } catch (e) {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '⚡ Batch Apply';
+    }
+    showToast('!', e.message || 'Could not dispatch batch edit');
+  }
+}
+
+async function pollPRBatch(id, count) {
+  const btn = $('#pr-batch-apply');
+  const poll = async () => {
+    try {
+      const j = await api('/api/agent/job?id=' + id);
+      if (j.running) {
+        const sec = Math.round((j.ms || 0) / 1000);
+        if (btn) btn.textContent = `Applying... (${sec}s)`;
+        setTimeout(poll, 600);
+        return;
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '⚡ Batch Apply';
+      }
+      if (j.error) {
+        showToast('!', `Agent error: ${j.error}`);
+        if (j.changed?.length) await reloadWorkspace(null);
+        return;
+      }
+      showToast('✓', `Batch applied ${count} comments!`);
+      await reloadWorkspace(null);
+      await refreshComments();
+    } catch (e) {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '⚡ Batch Apply';
+      }
+      showToast('!', e.message || 'Batch failed');
+    }
+  };
+  setTimeout(poll, 400);
 }
 
 async function submitReview(event) {
@@ -95,18 +168,16 @@ async function submitReview(event) {
 
 let seq = 0;
 
-function openCommentComposer(info) {
+export function openCommentComposer(info) {
   if (!meta) return;
-  if (meta.readOnly) { showToast('!', 'Read-only: no GitHub token configured'); return; }
-  if (!info.fromDiff) {
-    showToast('!', 'Open this file’s diff (Mod+D) to leave a review comment');
-    return;
-  }
   const id = 'prc' + (++seq);
   const box = document.createElement('div');
   box.className = 'agent-box';
   box.dataset.id = id;
-  const ref = info.path + ':' + (info.l1 === info.l2 ? info.l1 : info.l1 + '-' + info.l2);
+  const side = info.side || 'RIGHT';
+  const line = side === 'LEFT' ? (info.delL1 || info.l1) : info.l1;
+  const lineEnd = side === 'LEFT' ? (info.delL2 || info.l2) : info.l2;
+  const ref = info.path + ':' + (line === lineEnd ? line : line + '-' + lineEnd) + (side === 'LEFT' ? ' (base)' : '');
   const modEnter = keyLabel('Mod+Enter');
   box.innerHTML =
     '<div class="agent-head"><span class="sel-chip">Review Comment</span>' +
@@ -132,7 +203,7 @@ function openCommentComposer(info) {
     const errEl = box.querySelector('.agent-err');
     errEl.hidden = true;
     try {
-      const c = await apiPostJson('/api/pr/comments', { path: info.path, line: info.l1, side: 'RIGHT', body });
+      const c = await apiPostJson('/api/pr/comments', { path: info.path, line, side, body });
       comments.push(c);
       close();
       renderBar();
@@ -162,15 +233,18 @@ function renderMarkersForActiveDoc() {
   if (!diffview || diffview.hidden || !meta) return;
   const d = doc_();
   if (!d) return;
-  const byLine = new Map();
+  const byKey = new Map();
   for (const c of comments) {
     if (c.path !== d.path) continue;
-    if (!byLine.has(c.line)) byLine.set(c.line, []);
-    byLine.get(c.line).push(c);
+    const key = (c.side || 'RIGHT') + ':' + c.line;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(c);
   }
   for (const el of diffview.querySelectorAll('.pr-comment-mark')) el.remove();
-  for (const el of diffview.querySelectorAll('[data-l]')) {
-    const cs = byLine.get(+el.dataset.l);
+  for (const el of diffview.querySelectorAll('[data-l], [data-old-l]')) {
+    const isOldOnly = el.dataset.oldL !== undefined && el.dataset.l === undefined;
+    const key = isOldOnly ? ('LEFT:' + el.dataset.oldL) : ('RIGHT:' + el.dataset.l);
+    const cs = byKey.get(key);
     el.classList.toggle('pr-has-comment', !!cs);
     if (!cs) continue;
     const badge = document.createElement('span');

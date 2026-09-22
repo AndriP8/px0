@@ -61,7 +61,7 @@ export const PAL_MODES = {
   line: { tag: 'Line', hint: 'Enter a line number.' },
   command: { tag: 'Command', hint: '' },
   theme: { tag: 'Theme', hint: 'Arrows preview a theme. Enter keeps it, Esc restores the previous one.' },
-  openpr: { tag: 'Open PR', hint: 'PR number or github.com pull request URL, then Enter.' },
+  openpr: { tag: 'Open PR', hint: 'Full pull request URL (e.g. https://github.com/owner/repo/pull/123), then Enter.' },
 };
 
 export function openPalette(mode, seed) {

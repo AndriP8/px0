@@ -333,7 +333,7 @@ var settingsSchema = []settingSchemaItem{
 	{
 		Key:         "github.token",
 		Title:       "GitHub Token",
-		Description: "Personal access token used to check out and review pull requests (px0 pr). Takes precedence over the GITHUB_TOKEN environment variable and 'gh auth token'.",
+		Description: "Personal access token used to check out and review pull requests (px0 <url>). Takes precedence over the GITHUB_TOKEN environment variable and 'gh auth token'.",
 		Category:    "GitHub",
 		Type:        "string",
 		Default:     "",

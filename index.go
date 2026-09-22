@@ -44,6 +44,7 @@ type Index struct {
 	gitChanges   int
 	gitFiles     []string
 	gitStatusMap map[string]string
+	diffBase     string
 	readyCh      chan struct{}
 }
 
@@ -52,6 +53,18 @@ func NewIndex(root string) *Index {
 }
 
 func (ix *Index) Root() string { return ix.root }
+
+func (ix *Index) SetDiffBase(base string) {
+	ix.mu.Lock()
+	ix.diffBase = base
+	ix.mu.Unlock()
+}
+
+func (ix *Index) DiffBase() string {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.diffBase
+}
 
 func (ix *Index) Ready() bool {
 	select {
@@ -196,8 +209,9 @@ func (ix *Index) Build() {
 	// git status only needs the repo root, not the walk result, so run it
 	// concurrently with the walk instead of serially after it — on large repos
 	// the ~80ms subprocess overlaps the tree scan rather than adding to it.
+	base := ix.DiffBase()
 	gsCh := make(chan map[string]string, 1)
-	go func() { gsCh <- gitStatus(ix.root) }()
+	go func() { gsCh <- gitStatusAgainst(ix.root, base) }()
 
 	var walk func(abs, rel string, ig *ignoreSet)
 	walk = func(abs, rel string, ig *ignoreSet) {
@@ -346,7 +360,8 @@ func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, sta
 		return 0, nil, false, nil, nil
 	}
 
-	gs := gitStatus(ix.root)
+	base := ix.DiffBase()
+	gs := gitStatusAgainst(ix.root, base)
 	if gs == nil {
 		gs = map[string]string{}
 	}

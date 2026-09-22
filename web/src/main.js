@@ -24,6 +24,7 @@ import { initVim } from './vim.js';
 import { initImageViewer } from './imageview.js';
 import { initGitStream } from './gitstream.js';
 import { initPR } from './pr.js';
+import { initLineComment } from './linecomment.js';
 
 // Initialize all subsystems
 initRenderer();
@@ -48,6 +49,7 @@ initStatusFit();
 initSettings();
 initVim();
 initImageViewer();
+initLineComment();
 
 // Bootstrap application lifecycle
 (async function boot() {

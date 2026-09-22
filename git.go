@@ -64,6 +64,14 @@ func gitProbe(root string) gitInfo {
 // every file git considers changed. Uses porcelain v2 -z, the stable
 // null-delimited format. Fails quiet: nil on any error, no repo, or disabled.
 func gitStatus(root string) map[string]string {
+	return gitStatusAgainst(root, "HEAD")
+}
+
+// gitStatusAgainst maps changed files relative to root against base.
+// When base is "HEAD" or empty, it returns working-tree changes only.
+// When base is an arbitrary commit or ref (such as a PR merge-base),
+// it includes both files changed against base and working-tree changes.
+func gitStatusAgainst(root, base string) map[string]string {
 	info := gitProbe(root)
 	if !info.ok {
 		return nil
@@ -124,6 +132,41 @@ func gitStatus(root string) map[string]string {
 			}
 		}
 	}
+
+	// If diff base is set and not HEAD, overlay git diff --name-status against base
+	if base != "" && base != "HEAD" {
+		if diffOut, err := exec.Command("git", "-C", root, "diff", "--name-status", "-z", base).Output(); err == nil {
+			parts := strings.Split(string(diffOut), "\x00")
+			for i := 0; i < len(parts); i++ {
+				stStr := parts[i]
+				if stStr == "" {
+					continue
+				}
+				code := stStr[0]
+				if code == 'R' || code == 'C' {
+					// R<score> \0 <src> \0 <dst>
+					i += 2
+					if i < len(parts) {
+						if k, ok := key(parts[i]); ok {
+							if _, exists := status[k]; !exists {
+								status[k] = string(code)
+							}
+						}
+					}
+				} else {
+					i++
+					if i < len(parts) {
+						if k, ok := key(parts[i]); ok {
+							if _, exists := status[k]; !exists {
+								status[k] = string(code)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if len(status) == 0 {
 		return nil
 	}

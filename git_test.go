@@ -527,3 +527,116 @@ func TestGitWatcherCLICommitDetection(t *testing.T) {
 		t.Errorf("expected recordGitMeta to report changed=true after CLI commit")
 	}
 }
+
+func TestGitStatusAgainstAndPRDiff(t *testing.T) {
+	if !gitInstalled() {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	run := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("foo.go", "package main\n\nfunc Foo() int { return 1 }\n")
+	run("init")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "T")
+	run("config", "commit.gpgsign", "false")
+	run("add", "-A")
+	run("commit", "-m", "initial commit")
+	baseSHA := run("rev-parse", "HEAD")
+
+	// Commit a PR change: modifies foo.go
+	write("foo.go", "package main\n\nfunc Foo() int { return 2 }\n")
+	run("commit", "-am", "pr commit")
+
+	// Working tree is clean relative to HEAD
+	stHead := gitStatus(root)
+	if stHead != nil && stHead["foo.go"] != "" {
+		t.Fatalf("expected gitStatus(root) to be clean, got: %v", stHead)
+	}
+
+	// But gitStatusAgainst baseSHA must report foo.go as "M"
+	stBase := gitStatusAgainst(root, baseSHA)
+	if stBase == nil || stBase["foo.go"] != "M" {
+		t.Fatalf("expected gitStatusAgainst(root, baseSHA) to report foo.go as M, got: %v", stBase)
+	}
+
+	// Index should also pick up the diffBase
+	ix := NewIndex(root)
+	ix.SetDiffBase(baseSHA)
+	ix.Build()
+
+	count, files, _, statuses, _ := ix.UpdateGitStatus()
+	if count == 0 || statuses["foo.go"] != "M" {
+		t.Fatalf("expected Index to report foo.go as M against diffBase, got count=%d statuses=%v files=%v", count, statuses, files)
+	}
+
+	// Server should mark diffAvailable=true for foo.go
+	srv := NewServer(ix, newLSPManager(root, false))
+	srv.diffBase = baseSHA
+
+	req := httptest.NewRequest("GET", "/api/file?path=foo.go", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var fileResp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &fileResp); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if diffAvail, ok := fileResp["diffAvailable"].(bool); !ok || !diffAvail {
+		t.Errorf("expected diffAvailable=true for foo.go against baseSHA, got %v", fileResp["diffAvailable"])
+	}
+
+	// /api/diff should return the diff against baseSHA
+	diffReq := httptest.NewRequest("GET", "/api/diff?path=foo.go", nil)
+	dw := httptest.NewRecorder()
+	srv.ServeHTTP(dw, diffReq)
+	if dw.Code != 200 {
+		t.Fatalf("expected 200 from /api/diff, got %d: %s", dw.Code, dw.Body.String())
+	}
+	diffBody := dw.Body.String()
+	if !strings.Contains(diffBody, "-func Foo() int { return 1 }") || !strings.Contains(diffBody, "+func Foo() int { return 2 }") {
+		t.Errorf("unexpected diff against baseSHA:\n%s", diffBody)
+	}
+
+	// Now simulate an external terminal agent modifying foo.go
+	write("foo.go", "package main\n\nfunc Foo() int { return 99 }\n")
+
+	// ix.UpdateGitStatus() must catch the modification
+	_, _, changed, statuses, _ := ix.UpdateGitStatus()
+	if !changed && statuses["foo.go"] != "M" {
+		t.Errorf("expected UpdateGitStatus to report foo.go as changed/M, got changed=%v statuses=%v", changed, statuses)
+	}
+
+	// Server /api/diff against baseSHA must reflect the external edit in real time
+	diffReq2 := httptest.NewRequest("GET", "/api/diff?path=foo.go", nil)
+	dw2 := httptest.NewRecorder()
+	srv.ServeHTTP(dw2, diffReq2)
+	if dw2.Code != 200 {
+		t.Fatalf("expected 200 from /api/diff, got %d: %s", dw2.Code, dw2.Body.String())
+	}
+	diffBody2 := dw2.Body.String()
+	if !strings.Contains(diffBody2, "-func Foo() int { return 1 }") || !strings.Contains(diffBody2, "+func Foo() int { return 99 }") {
+		t.Errorf("unexpected diff against baseSHA after external edit:\n%s", diffBody2)
+	}
+}

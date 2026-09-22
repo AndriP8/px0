@@ -49,6 +49,7 @@
     <div id="pr-bar" class="pr-bar" hidden>
       <div class="pr-bar-row">
         <span id="pr-badge" class="pr-badge"></span>
+        <span id="pr-merged-badge" class="pr-merged-badge" hidden>Merged</span>
         <span id="pr-title" class="pr-title"></span>
         <span id="pr-refs" class="pr-refs"></span>
         <span class="grow"></span>
@@ -57,6 +58,7 @@
       </div>
       <div class="pr-bar-row pr-review-row">
         <textarea id="pr-review-body" class="pr-review-body" rows="1" spellcheck="false" autocomplete="off" placeholder="Leave an overall review comment (optional)..."></textarea>
+        <button id="pr-batch-apply" class="footer-btn pr-btn-batch-apply" hidden title="Dispatch AI agent to apply all draft review comments directly to the codebase">⚡ Batch Apply</button>
         <button id="pr-submit-comment" class="footer-btn" title="Submit as a plain comment, no verdict">Comment</button>
         <button id="pr-submit-request-changes" class="footer-btn" hidden title="Request changes on this PR">Request Changes</button>
         <button id="pr-submit-approve" class="footer-btn" hidden title="Approve this PR">Approve</button>

@@ -73,9 +73,10 @@ export function getSelectedRangeInfo() {
    on both sides of a split is taken once. */
 function diffSelection(range, d) {
   let l1 = Infinity, l2 = -Infinity, at1 = Infinity, at2 = -Infinity;
+  let old1 = Infinity, old2 = -Infinity;
   const parts = [];
   const seen = new Set();
-  for (const el of diffviewEl.querySelectorAll('[data-l], [data-at]')) {
+  for (const el of diffviewEl.querySelectorAll('[data-l], [data-at], [data-old-l]')) {
     if (!range.intersectsNode(el)) continue;
     const code = el.querySelector('.diff-code');
     if (el.dataset.l !== undefined) {
@@ -84,22 +85,33 @@ function diffSelection(range, d) {
       if (n > l2) l2 = n;
       if (seen.has(n)) continue;
       seen.add(n);
-    } else {
+    } else if (el.dataset.at !== undefined) {
       const n = +el.dataset.at;
       if (n < at1) at1 = n;
       if (n > at2) at2 = n;
     }
+    if (el.dataset.oldL !== undefined && el.dataset.l === undefined) {
+      const n = +el.dataset.oldL;
+      if (n < old1) old1 = n;
+      if (n > old2) old2 = n;
+    }
     parts.push(code ? code.textContent : '');
   }
   if (!parts.length) return null;
-  if (l1 === Infinity) {
+  const isDeletedOnly = (l1 === Infinity);
+  let side = 'RIGHT';
+  let delL1 = 0, delL2 = 0;
+  if (isDeletedOnly) {
+    side = 'LEFT';
+    delL1 = old1 !== Infinity ? old1 : 1;
+    delL2 = old2 !== Infinity ? old2 : delL1;
     const last = Math.max(1, d.total || 1);
     l1 = Math.min(last, Math.max(1, at1 - 1));
     l2 = Math.max(l1, Math.min(last, at2));
   }
   const text = parts.join('\n').trim();
   if (!text) return null;
-  return { text, l1, l2, path: d.path, fromDiff: true };
+  return { text, l1, l2, delL1, delL2, path: d.path, fromDiff: true, side };
 }
 
 const selectionRef = ({ path, l1, l2 }) => path + ':' + (l1 === l2 ? l1 : l1 + '-' + l2);

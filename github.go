@@ -9,21 +9,66 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// github.go talks to the GitHub REST API for PR review (pr.go). Like git.go,
-// it avoids third-party SDKs: net/http plus a shell-out to the gh CLI as one
-// of three token sources, nothing more.
+// github.go talks to the GitHub REST API for PR review (pr.go) via the
+// GitHubProvider implementation of GitProvider. Like git.go, it avoids
+// third-party SDKs: net/http plus a shell-out to the gh CLI as one of three
+// token sources, nothing more.
 
 const githubAPIBase = "https://api.github.com"
 
 var githubHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
+var githubPRURLRe = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+)/([^/]+)/pull/(\d+)`)
+
+// GitHubProvider implements GitProvider for GitHub.
+type GitHubProvider struct{}
+
+func (g *GitHubProvider) Name() string { return "github" }
+
+func (g *GitHubProvider) MatchURL(rawURL string) bool {
+	return githubPRURLRe.MatchString(strings.TrimSpace(rawURL))
+}
+
+func (g *GitHubProvider) ParseURL(rawURL string) (PRTarget, error) {
+	m := githubPRURLRe.FindStringSubmatch(strings.TrimSpace(rawURL))
+	if m == nil {
+		return PRTarget{}, fmt.Errorf("invalid GitHub pull request URL: %q (expected format https://github.com/owner/repo/pull/123)", rawURL)
+	}
+	n, _ := strconv.Atoi(m[3])
+	return PRTarget{
+		Provider: "github",
+		Owner:    m[1],
+		Repo:     strings.TrimSuffix(m[2], ".git"),
+		Number:   n,
+		URL:      rawURL,
+	}, nil
+}
+
+func (g *GitHubProvider) ResolveToken(cfg settings) (token, source string) {
+	return resolveGitHubToken(cfg)
+}
+
+func (g *GitHubProvider) FetchPR(ctx context.Context, target PRTarget, token string) (PRMeta, error) {
+	return fetchPRMeta(ctx, target.Owner, target.Repo, target.Number, token)
+}
+
+func (g *GitHubProvider) CheckPushAccess(ctx context.Context, target PRTarget, token string) bool {
+	return checkPushAccess(ctx, target.Owner, target.Repo, token)
+}
+
+func (g *GitHubProvider) SubmitReview(ctx context.Context, target PRTarget, token, headSHA string, comments []prComment, event, body string) error {
+	return submitReview(ctx, target.Owner, target.Repo, target.Number, token, headSHA, comments, event, body)
+}
+
 // resolveGitHubToken looks for a token in order: the explicit px0 setting
-// (github.token), the GITHUB_TOKEN environment variable, then the gh CLI if
-// installed and logged in. An empty return means PR review stays read-only.
+// (github.token), the GITHUB_TOKEN environment variable, GH_TOKEN, then the gh CLI
+// if installed and logged in. An empty return means PR review stays read-only.
 func resolveGitHubToken(cfg settings) (token, source string) {
 	if cfg.GitHubToken != nil {
 		if t := strings.TrimSpace(*cfg.GitHubToken); t != "" {
@@ -31,6 +76,9 @@ func resolveGitHubToken(cfg settings) (token, source string) {
 		}
 	}
 	if t := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); t != "" {
+		return t, "env"
+	}
+	if t := strings.TrimSpace(os.Getenv("GH_TOKEN")); t != "" {
 		return t, "env"
 	}
 	if out, err := exec.Command("gh", "auth", "token").Output(); err == nil {
@@ -92,35 +140,28 @@ func checkPushAccess(ctx context.Context, owner, repo, token string) bool {
 	return out.Permissions.Push
 }
 
-// prMeta is the subset of a GitHub pull request px0 needs to check it out
-// and label the review UI.
-type prMeta struct {
-	Number           int
-	Title            string
-	Author           string
-	Draft            bool
-	BaseRef          string
-	HeadRef          string
-	HeadSHA          string
-	HeadRepoCloneURL string
-	HeadIsFork       bool
-}
-
-func fetchPRMeta(ctx context.Context, owner, repo string, num int, token string) (prMeta, error) {
+func fetchPRMeta(ctx context.Context, owner, repo string, num int, token string) (PRMeta, error) {
 	resp, err := githubRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, num), token, nil)
 	if err != nil {
-		return prMeta{}, err
+		return PRMeta{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return prMeta{}, fmt.Errorf("github: fetch PR #%d: %s: %s", num, resp.Status, strings.TrimSpace(string(b)))
+		bodyMsg := strings.TrimSpace(string(b))
+		if token == "" && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized) {
+			return PRMeta{}, fmt.Errorf("github: fetch PR #%d: %s (no GitHub token found; for private repos or rate limits, set GITHUB_TOKEN or run 'gh auth login'): %s", num, resp.Status, bodyMsg)
+		}
+		return PRMeta{}, fmt.Errorf("github: fetch PR #%d: %s: %s", num, resp.Status, bodyMsg)
 	}
 	var out struct {
-		Number int    `json:"number"`
-		Title  string `json:"title"`
-		Draft  bool   `json:"draft"`
-		User   struct {
+		Number   int    `json:"number"`
+		Title    string `json:"title"`
+		State    string `json:"state"`
+		Merged   bool   `json:"merged"`
+		MergedAt string `json:"merged_at"`
+		Draft    bool   `json:"draft"`
+		User     struct {
 			Login string `json:"login"`
 		} `json:"user"`
 		Base struct {
@@ -136,12 +177,15 @@ func fetchPRMeta(ctx context.Context, owner, repo string, num int, token string)
 		} `json:"head"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return prMeta{}, err
+		return PRMeta{}, err
 	}
-	m := prMeta{
+	m := PRMeta{
 		Number:           out.Number,
 		Title:            out.Title,
 		Author:           out.User.Login,
+		State:            out.State,
+		Merged:           out.Merged || out.MergedAt != "",
+		MergedAt:         out.MergedAt,
 		Draft:            out.Draft,
 		BaseRef:          out.Base.Ref,
 		HeadRef:          out.Head.Ref,
@@ -166,7 +210,7 @@ type prComment struct {
 // submitReview posts one review carrying every draft comment plus an overall
 // verdict in a single call, mirroring GitHub's own draft-then-submit model
 // so px0 never needs a per-comment endpoint.
-func submitReview(ctx context.Context, owner, repo string, num int, token string, comments []prComment, event, body string) error {
+func submitReview(ctx context.Context, owner, repo string, num int, token, commitID string, comments []prComment, event, body string) error {
 	type reviewComment struct {
 		Path string `json:"path"`
 		Line int    `json:"line"`
@@ -174,10 +218,11 @@ func submitReview(ctx context.Context, owner, repo string, num int, token string
 		Body string `json:"body"`
 	}
 	payload := struct {
+		CommitID string          `json:"commit_id,omitempty"`
 		Body     string          `json:"body,omitempty"`
 		Event    string          `json:"event"`
 		Comments []reviewComment `json:"comments,omitempty"`
-	}{Body: body, Event: event}
+	}{CommitID: commitID, Body: body, Event: event}
 	for _, c := range comments {
 		payload.Comments = append(payload.Comments, reviewComment{Path: c.Path, Line: c.Line, Side: c.Side, Body: c.Body})
 	}

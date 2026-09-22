@@ -1,52 +1,123 @@
-# GitHub Pull Request Review
+# Pull Request Review & Agent Collaboration
 
-px0 can check out a GitHub pull request's full source tree and review it like any other workspace: full navigation, symbol outline, LSP, and search, alongside a diff scoped to exactly what the PR changes and an Approve / Request Changes / Comment review you can submit without leaving the browser.
+px0 can check out a pull request's full source tree and review it like any local workspace: full codebase navigation, symbol outline, LSP intelligence, and search, alongside a diff scoped to the PR's merge-base, real-time coding agent synchronization, inline comment drafting, and AI batch application.
 
 ---
 
 ## Overview & Core Purpose
 
-GitHub's own PR view shows you the diff, but not the codebase around it: jumping to a caller three files away, or checking how a changed function is used elsewhere, means either trusting memory or cloning the branch yourself. `px0 pr` does the checkout for you and hands you the same fast, zero-config reading experience px0 already gives a local repository — just pointed at a PR's head commit instead of your working tree.
+GitHub's web PR view shows you the isolated diff, but not the codebase around it: jumping to a caller three files away, or checking how a changed function is used elsewhere, means either trusting memory or manually cloning and switching branches.
 
----
-
-## Opening a PR
-
+With px0, you simply pass the pull request URL:
 ```bash
-px0 pr 123                                       # PR number; resolves your cwd's "origin" remote
-px0 pr https://github.com/owner/repo/pull/123     # a full URL works from anywhere, no cwd repo needed
-px0 https://github.com/owner/repo/pull/123        # the "pr" subcommand is optional for a full URL
+px0 https://github.com/owner/repo/pull/123
 ```
 
-Each PR review is its own process on its own port — running `px0 pr 456` while another PR review (or your local repo) is already open in px0 does not disturb it. From inside a running px0 session, the Command Palette's **Git: Open Pull Request…** does the same thing: it launches a new px0 process for that PR and opens it in a new browser tab, leaving your current session exactly as it was.
-
-What happens under the hood:
-- px0 fetches the PR's head ref (`refs/pull/<n>/head`) into a throwaway git worktree — the same repository, a different checkout, not a second clone, when px0 is launched from inside a checkout of that repo. From anywhere else (or a PR from a fork), px0 does a shallow single-branch clone of the PR head instead.
-- The diff view and gutter show changes against the PR's merge-base with its target branch, not the PR head's own `HEAD` — the same PR-scoped diff you'd see on github.com, not a diff against whatever the branch's own last commit happens to be.
-- The checkout lives only for the life of the process: closing px0 (`Ctrl+C`) removes it. Nothing is written to `~/.px0` or any cache directory — reopening the same PR later checks it out fresh.
+px0 automatically prepares a temporary worktree or clone, computes the merge-base diff against the target branch, and opens a lightweight, zero-latency code viewer in your browser.
 
 ---
 
-## Reviewing
+## Opening a Pull Request
 
-- The **Changes** toggle in the sidebar (the same one used for a local working tree) defaults to the PR's changed files.
-- Open a file's diff (`Cmd/Ctrl+D`) and select a line to leave a review comment: the footer selection bar gains a **Comment** button (`Alt+R`), alongside the usual Copy Ref / Copy with Context / Edit Inline / Find Usages actions, and the same action is in the right-click menu.
-- Comments are **drafts** until you submit the review — nothing is posted to GitHub as you write them. A PR bar above the tabs tracks the draft count and hosts the overall review body and the three submit actions: **Comment**, **Request Changes**, and **Approve**.
-- **Approve** and **Request Changes** only appear if your resolved GitHub credentials have push access to the repository; everyone with read access still gets **Comment**. With no credentials at all, PR review is read-only: you get the checkout and the diff, with no comment or review UI.
+Pull request review is triggered by passing the full URL directly:
 
-Submitting posts one GitHub review carrying every draft comment plus your overall verdict, the same way GitHub's own "finish your review" button works — not one API call per comment.
+```bash
+px0 https://github.com/owner/repo/pull/123
+```
+
+> [!NOTE]
+> Bare PR numbers (e.g. `px0 123`) and the `px0 pr` subcommand have been deprecated in favor of explicit URL routing (`px0 <url>`). Running `px0 pr` provides a helpful reminder to pass the URL directly.
+
+### Interactive Preparation Spinner
+Because fetching metadata and checking out remote references takes a few moments, px0 displays an animated CLI spinner:
+```text
+⠋ Fetching PR #123 metadata from github...
+⠙ Fetching PR #123 head and preparing worktree...
+⠸ Computing merge base with main...
+✔ PR #123 checked out (Refactor auth token resolution)
+```
+
+### Merged PR Handling & Confirmation
+If the pull request is already merged:
+- px0 detects its merged status from the API.
+- In interactive terminals, it pauses and prompts for confirmation:
+  ```text
+  ! PR #123 is already merged into main  Refactor auth token resolution
+    ? Open anyway? [y/N]
+  ```
+- Typing `y` continues with the review session; pressing Enter or typing `n` cleanly aborts.
+- To bypass the prompt (for scripting or automated environments), pass `-y` or `-yes`:
+  ```bash
+  px0 -y https://github.com/owner/repo/pull/123
+  ```
+- In both the CLI banner and the browser review header, a prominent purple **`Merged`** pill badge is displayed.
+
+### Multi-Session Isolation
+Each PR review runs as its own isolated process on its own port. Running `px0 https://github.com/owner/repo/pull/456` while another PR review or local workspace is open will not disturb existing sessions.
+
+From inside a running px0 browser session, the Command Palette (`Cmd/Ctrl+K` → **Git: Open Pull Request…**) launches a new review process in a fresh browser tab.
 
 ---
 
-## Authentication
+## Reviewing & Real-Time Agent Collaboration
 
-px0 needs a GitHub token to check push access and to post comments/reviews (checkout itself works unauthenticated for public repos). It looks in this order, using the first one it finds:
+### 1. Merge-Base Diff View
+- The **Changes** toggle in the sidebar defaults to all files modified by the PR.
+- Press **`Cmd/Ctrl+D`** on any file to open side-by-side or unified diffs.
+- The diff is computed against the merge-base between the PR head and its target branch, exactly mirroring the diff shown on GitHub.
 
-1. **`github.token`** in Settings (`Cmd/Ctrl+,` → GitHub, or directly in `~/.px0/settings.json`) — the most specific to px0, useful on a headless/remote box with no `gh` installed.
+### 2. Live Agent Synchronization
+When you or your background AI coding agents (Claude Code, Gemini CLI, Cursor Agent, Antigravity, Aider, etc.) make edits to the PR checkout from other terminals:
+- px0's real-time file watcher immediately picks up modifications without full re-indexing.
+- Gutter diffs, status badges, and open tabs reload live in the browser.
+
+### 3. Line Comments & Hover Actions
+When hovering over code lines or diff lines:
+- A pencil icon (`✏`) appears next to the line number.
+- Clicking the pencil icon opens a context menu with two actions:
+  - **Leave Comment on GitHub**: Drafts an inline review comment.
+  - **Leave Comment for Inline Edit**: Prompts your local AI coding agent to edit those lines directly.
+- Alternatively, select any range of lines and press **`Alt+R`** (or click **Comment** on the selection bar) to open the review comment composer.
+
+### 4. Batch Applying Comments Locally (`⚡ Batch Apply`)
+Drafted review comments appear in the PR top bar and inline across files:
+- **⚡ Batch Apply**: Lets you apply all drafted review comments across the entire pull request in one go using your configured coding agent harness. The agent reads your comments as instructions and modifies the code directly in the PR worktree.
+- Comments remain drafts in memory until either batch-applied or formally submitted.
+
+### 5. Submitting Formal Reviews
+The PR review bar above the editor tabs hosts the overall review summary and verdict actions:
+- **Comment**: Submit feedback without an approval status (available to all reviewers).
+- **Approve** / **Request Changes**: Available when your authenticated token has repository push access.
+- Submitting posts a single review payload containing all draft line comments and the review body.
+
+---
+
+## Authentication & Read-Only Review
+
+px0 discovers forge credentials in the following order:
+
+1. **`github.token`** in px0 Settings (`Cmd/Ctrl+,` → GitHub, or `~/.px0/settings.json`).
 2. **`GITHUB_TOKEN`** environment variable.
-3. **`gh auth token`** — if the [GitHub CLI](https://cli.github.com/) is installed and logged in, px0 reuses it with no further setup.
+3. **`GH_TOKEN`** environment variable.
+4. **`gh auth token`** via the GitHub CLI if installed and authenticated.
 
-If none resolve, `px0 pr` still works — checkout and diffing don't need a token for a public repository — but the review UI stays hidden.
+### Unauthenticated & Read-Only Access
+If no token is configured:
+- Public repositories still check out and diff seamlessly.
+- You can draft review comments in memory and use **⚡ Batch Apply** with local AI agents.
+- Formal review submission back to the remote forge requires an auth token. The CLI banner displays:
+  ```text
+  access: read-only (no github token: set GITHUB_TOKEN or gh auth login to submit reviews)
+  ```
+
+---
+
+## Extensible Forge Architecture (`GitProvider`)
+
+px0 abstracts forge interactions through a clean, minimal `GitProvider` interface in [`provider.go`](file:///home/arpit/workspace/px0/px0/provider.go):
+- **Provider Detection**: Matches input URLs against registered providers (GitHub, and in the future GitLab, Bitbucket, etc.).
+- **Normalized Metadata**: Maps forge-specific PR/MR objects to standard `PRMeta` structures.
+- **Push Access & Token Discovery**: Isolates provider-specific authentication mechanisms.
 
 ---
 
@@ -54,19 +125,9 @@ If none resolve, `px0 pr` still works — checkout and diffing don't need a toke
 
 | Shortcut / Control | Context | Action |
 | :--- | :--- | :--- |
-| `Alt+R` | Selection in a diff view, PR review only | Draft a review comment on the selected line |
-| Right-Click | Selection in a diff view, PR review only | **Add Review Comment** in the context menu |
-| Command Palette → **Git: Open Pull Request…** | Any session | Launch another PR review in a new tab |
-
----
-
-## Configuration & Preferences
-
-- **`github.token`**: personal access token used for PR review, stored like any other px0 setting. See [Settings & Configuration](settings-and-configuration.md).
-- **CLI**: `px0 pr <number-or-url>`. All the usual flags (`-port`, `-no-open`, `-host`, …) apply the same way they do to a normal `px0 <directory>` invocation.
-
----
-
-## Technical Architecture Deep Dive
-
-For the checkout and worktree lifecycle, the auth resolution and push-access check, the merge-base diffing, and the in-memory (never persisted) draft comment model, see [GitHub PR Review Internals](../internals/github-pr-review.md).
+| `Alt+R` | Selection in editor or diff view | Open review comment composer |
+| Line Hover (`✏`) | Hovering on editor line number | Choose between GitHub review comment or inline agent edit |
+| `Cmd/Ctrl+D` | Active tab | Toggle side-by-side / unified diff against merge-base |
+| Command Palette (`Cmd/Ctrl+K`) | Command Palette → **Git: Open Pull Request…** | Launch a new PR review tab |
+| **`⚡ Batch Apply`** | PR header bar | Dispatch all drafted comments to local AI coding harness |
+| **Submit Review** | PR header bar | Submit Approve / Request Changes / Comment to remote forge |

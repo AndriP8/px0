@@ -114,7 +114,7 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 	metaTicker := time.NewTicker(1 * time.Second)
 	defer metaTicker.Stop()
 
-	adaptiveInterval := 2 * time.Second
+	adaptiveInterval := 1 * time.Second
 	worktreeTicker := time.NewTicker(adaptiveInterval)
 	defer worktreeTicker.Stop()
 
@@ -140,12 +140,12 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 			// Only run when at least one client is actively listening.
 			if gw.active.Load() > 0 {
 				dur := gw.checkAndBroadcast()
-				// Adapt interval based on execution speed: min 2s, max 15s.
-				newInterval := dur * 10
-				if newInterval < 2*time.Second {
-					newInterval = 2 * time.Second
-				} else if newInterval > 15*time.Second {
-					newInterval = 15 * time.Second
+				// Adapt interval based on execution speed: min 1s, max 10s.
+				newInterval := dur * 5
+				if newInterval < 1*time.Second {
+					newInterval = 1 * time.Second
+				} else if newInterval > 10*time.Second {
+					newInterval = 10 * time.Second
 				}
 				if newInterval != adaptiveInterval {
 					adaptiveInterval = newInterval

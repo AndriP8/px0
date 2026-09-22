@@ -309,6 +309,12 @@ func (s *Server) SetPR(p *prSession) {
 	s.pr = p
 	if p != nil {
 		s.diffBase = p.diffBase
+		if s.ix != nil {
+			s.ix.SetDiffBase(p.diffBase)
+		}
+		if s.gitWatcher != nil {
+			s.gitWatcher.Trigger()
+		}
 	}
 }
 
@@ -387,6 +393,9 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 			"author":      p.meta.Author,
 			"base":        p.meta.BaseRef,
 			"head":        p.meta.HeadRef,
+			"state":       p.meta.State,
+			"merged":      p.meta.Merged,
+			"mergedAt":    p.meta.MergedAt,
 			"writeAccess": p.writeAccess,
 			"readOnly":    p.token == "",
 			"draftCount":  len(p.comments),
@@ -689,7 +698,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	_, coming := d.Exact()
 	diffAvail := false
 	if gitAvailable(s.ix.Root()) {
-		diffAvail = gitDiff(s.ix.Root(), rel) != ""
+		diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != ""
 	}
 	writeJSON(w, map[string]any{
 		"path": rel, "lang": d.Lang, "total": d.Total, "maxCols": d.MaxCols,

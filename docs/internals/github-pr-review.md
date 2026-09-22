@@ -1,103 +1,171 @@
-# GitHub PR Review
+# Git Forge PR Review & Provider Architecture
 
-This document describes the design and implementation of px0's GitHub pull request review feature: checkout and lifecycle ([`pr.go`](../../pr.go)), the GitHub REST client ([`github.go`](../../github.go)), merge-base diffing ([`git.go`](../../git.go)), and the frontend ([`web/src/pr.js`](../../web/src/pr.js)).
+This document describes the design and implementation of px0's pull request review feature: the `GitProvider` abstraction layer ([`provider.go`](../../provider.go)), GitHub REST implementation ([`github.go`](../../github.go)), checkout lifecycle and progress reporting ([`pr.go`](../../pr.go)), merge-base diffing ([`git.go`](../../git.go)), and the frontend review interface ([`web/src/pr.js`](../../web/src/pr.js), [`web/src/linecomment.js`](../../web/src/linecomment.js)).
 
 ---
 
 ## 1. Zero-Dependency, Process-Scoped Design
 
-Two of px0's existing tenets shape this feature directly (see [`docs/agents/README.md`](../agents/README.md)):
+Two core px0 tenets shape pull request reviews:
 
-- **Zero-dependency shell-out**: like `git.go`, which never links a Go git library, PR review never links a GitHub SDK. `github.go` is `net/http` against the plain REST API, plus one optional shell-out to the `gh` CLI as a token source. Checkout itself is `git fetch` / `git worktree add` / `git clone`, exactly the same `exec.Command` style as the rest of the codebase.
-- **Stateless on disk**: px0 leaves no cache directory under `~/.px0` beyond `settings.json`. A PR checkout is not an exception: `checkoutPR` (`pr.go`) puts the worktree in `os.MkdirTemp("", "px0-pr-*")`, a system temp directory, and `prSession.Close` removes it — called from `main.go` in the same place `lsp.Close()` and `agent.Close()` already run, on both a clean `Ctrl+C` and a normal exit. This falls directly out of the "one PR per process" model: since a PR review is never shared across processes, there is nothing to gain from caching the worktree past the process's own lifetime, and every reason (per the disk-state tenet) not to.
-
-Draft review comments follow the same rule: `prSession.comments` is an in-memory, mutex-guarded slice, identical in spirit to `agentManager.jobs` — never written to disk, gone the moment the process exits (submitted or not).
-
----
-
-## 2. Target Resolution
-
-`parsePRTarget(arg, cwd)` (`pr.go`) turns a CLI argument into `(owner, repo, num)`:
-
-- A full `github.com/<owner>/<repo>/pull/<n>` URL (with or without a scheme) is self-contained — no filesystem or network access needed to parse it. `isGitHubPRURL` (the same regex) is what lets `main.go` treat a bare pasted URL as a PR target even without the `pr` subcommand.
-- A bare number shells `git -C <cwd> remote get-url origin` and regex-matches a `github.com` host out of either the HTTPS or SSH remote form. No `origin`, or a non-`github.com` origin, is a clear CLI error rather than a silent fallback.
-
-`main.go` dispatches on this before the normal `resolveTarget` path: `px0 pr <arg>` or a bare argument matching `isGitHubPRURL` skips directory resolution entirely and calls `checkoutPR` instead.
+- **Zero-dependency shell-out**: Like `git.go` (which links no Go git library), px0 avoids external forge SDKs. `github.go` uses standard Go `net/http` against the GitHub REST API, plus an optional shell-out to `gh auth token`. Checkout itself uses standard `git fetch`, `git worktree add`, or `git clone` via `exec.Command`.
+- **Stateless on disk**: px0 maintains no persistent cache in `~/.px0`. A PR checkout is strictly process-scoped: `checkoutPR` (`pr.go`) places the worktree in `os.MkdirTemp("", "px0-pr-*")`, and `prSession.Close` removes it upon exit (`Ctrl+C` or normal shutdown). This ensures zero leftover disk clutter and prevents stale cache bugs.
+- **In-memory draft comments**: Draft comments live in `prSession.comments` as a thread-safe, mutex-guarded slice in server memory. They never touch disk and vanish when the process exits (submitted or discarded).
 
 ---
 
-## 3. Checkout
+## 2. Extensible Forge Architecture (`GitProvider`)
 
-`checkoutPR` (`pr.go`) does, in order:
-
-1. Resolve a GitHub token (§4) and fetch PR metadata (`fetchPRMeta`, `github.go`) — title, author, draft state, base ref, head ref/SHA, and the head repo's clone URL (needed for a fork PR).
-2. `os.MkdirTemp` for the worktree destination.
-3. If `cwd` is already a checkout of the same `owner/repo` (its `origin` remote matches), fetch `refs/pull/<n>/head:refs/px0/pr/<n>` into that repository and `git worktree add --detach <tmp> refs/px0/pr/<n>` — the common case (`px0 pr 123` run inside the repo you're reviewing) reuses the existing clone's object store instead of downloading it twice.
-4. Otherwise (a bare URL from an unrelated directory, or a fork PR), `git clone --filter=blob:none --branch <head-ref> --single-branch <clone-url> <tmp>` — a partial clone of just the PR's branch.
-5. Best-effort, fetch the base branch (`refs/heads/<base>:refs/px0/base/<n>`) and compute `gitMergeBase(tmp, "HEAD", "refs/px0/base/<n>")` (§5). If either step fails (e.g. the base branch was force-pushed away since the PR opened), `diffBase` falls back to `"HEAD"` — still a correct diff, just against the PR head's own last commit rather than a clean merge-base.
-6. Check push access (§4) once, up front, so the frontend's write UI never has to guess.
-
-`prSession.Close` removes the worktree registration (`git worktree remove --force`) when one exists, then `os.RemoveAll`s the temp directory. Safe to call on a nil `*prSession`, matching `agentManager.Close`'s existing nil-receiver pattern in `main.go`.
-
-Everything downstream — indexing, the git watcher, LSP, agent editing — runs against the checked-out worktree root exactly like it would against any other directory px0 is pointed at. PR review adds no special cases to those subsystems.
-
----
-
-## 4. Authentication & Push-Access Gating
-
-`resolveGitHubToken(cfg settings)` (`github.go`) tries, in order: the `github.token` setting, the `GITHUB_TOKEN` environment variable, then `gh auth token`. The first non-empty result wins; an all-empty result means read-only review (checkout and diffing still work unauthenticated for a public repo).
-
-`checkPushAccess(ctx, owner, repo, token)` calls `GET /repos/{owner}/{repo}` and reads `permissions.push` off the response — the same "what can the authenticated user do here" signal most GitHub tooling uses, rather than trying to infer collaborator status from a separate endpoint. It **fails closed**: a transport error, a non-200, or a missing field all yield `false`. This matters because the result gates whether Approve/Request Changes even render (`Server.handlePRMeta`, `Server.handleMeta`) — a broken check can only ever hide write actions, never expose ones the token doesn't actually have.
-
-`Server.handlePRSubmit` (`pr.go`) re-checks `p.writeAccess` server-side before allowing `APPROVE` or `REQUEST_CHANGES` through, independent of whatever the frontend chose to render — the frontend gate is a UX convenience, not the enforcement point.
-
----
-
-## 5. Diffing Against a Merge-Base, Not HEAD
-
-Every other px0 diff (`handleDiff`, `handleGutter`, the `Cmd/Ctrl+D` diff view) compares the working tree to `HEAD`. A PR review needs to compare the PR head to *where it diverged from the target branch* — its merge-base — so the diff shown is exactly what GitHub's own PR view shows, not the PR head's full history against whatever its own last commit is.
-
-`git.go` splits the two diff primitives to take an explicit base:
+To support multiple git forges (GitHub, GitLab, Bitbucket, etc.) without entangling core review logic, forge interactions are abstracted behind the `GitProvider` interface in [`provider.go`](../../provider.go):
 
 ```go
-func gitDiff(root, relpath string) string { return gitDiffAgainst(root, relpath, "HEAD") }
-func gitDiffAgainst(root, relpath, base string) string { /* git diff --no-color <base> -- <relpath> */ }
-
-func gitHunksAgainst(root, relpath, base string) (added, modified, deleted []int) { /* ... */ }
+type GitProvider interface {
+    Name() string
+    MatchURL(rawURL string) bool
+    ParseURL(rawURL string) (PRTarget, error)
+    ResolveToken(cfg settings) (token, source string)
+    FetchPR(ctx context.Context, target PRTarget, token string) (PRMeta, error)
+    CheckPushAccess(ctx context.Context, target PRTarget, token string) bool
+    SubmitReview(ctx context.Context, target PRTarget, token, headSHA string, comments []prComment, event, body string) error
+}
 ```
 
-`gitDiff` is an unchanged one-line wrapper, so every existing caller keeps diffing against `HEAD` with no code change. `Server.diffBase` (`server.go`) is the one new piece of state: it defaults to `"HEAD"` and is set to the PR's merge-base by `Server.SetPR` when `main.go` launches a review session. `handleDiff` and `handleGutter` pass `s.diffBase` through to `gitDiffAgainst`/`gitHunksAgainst` instead of calling the `HEAD`-only wrappers.
+### Data Models
+- **`PRTarget`**: Normalized identifier containing `Provider`, `Owner`, `Repo`, `Number`, and original `URL`.
+- **`PRMeta`**: Standardized metadata across all providers:
+  - `Number`, `Title`, `Author`
+  - `State`, `Merged`, `MergedAt`
+  - `Draft`
+  - `BaseRef`, `HeadRef`, `HeadSHA`
+  - `HeadRepoCloneURL`, `HeadIsFork`
 
-`gitMergeBase(root, a, b)` shells `git merge-base a b`, quiet-failing to `""` the same way every other `git.go` helper does (no git, no repo, or the ref not found).
-
----
-
-## 6. Draft Comments & Review Submission
-
-`prSession.comments []prComment` is the single source of truth for drafts, guarded by `prSession.mu`. The HTTP surface (`pr.go`):
-
-- `GET /api/pr/comments` — list, used both by the frontend on load (so a browser refresh doesn't lose drafts already added — they live on the server, not in the page) and to repaint gutter markers after any change.
-- `POST /api/pr/comments` — append one draft (`localPost`-gated, same local-origin check every other write endpoint in px0 uses).
-- `POST /api/pr/comments/delete` — remove one by id.
-- `POST /api/pr/submit` — `submitReview` (`github.go`) posts everything in one `POST /repos/{o}/{r}/pulls/{n}/reviews` call: the draft comments array, the overall review body, and the verdict (`APPROVE` / `REQUEST_CHANGES` / `COMMENT`). This mirrors GitHub's own two-step "add comments, then submit review" UI in a single API call rather than one request per comment. On success, `prSession.comments` is cleared — a submitted review has nothing left to resubmit.
-
-`Server.handleMeta`'s response gains a `pr` object (number, title, base/head refs, `writeAccess`, `readOnly`, `draftCount`) whenever `Server.pr != nil`, which is how the frontend knows on load whether it's in a review session at all — there is no separate "is this a PR" endpoint.
-
----
-
-## 7. Frontend
-
-`web/src/pr.js` follows the same one-way registration pattern `web/src/agent.js` already uses to hook into `web/src/selbar.js` (`setAgentHandler`) and `web/src/diff.js` — neither `selbar.js` nor `diff.js` imports anything from `pr.js`; `pr.js` calls `setReviewHandler` (selbar) and `setPRSyncHandler` (diff) once at `initPR()`, so a normal (non-PR) session carries zero PR-review code paths beyond the no-op check `if (!S.meta.pr) return`.
-
-- The draft comment composer reuses the `.agent-box` / `.agent-compose` CSS classes the agent-edit composer already defines, built the same way `openAgentEdit` builds its box (a cloned/constructed DOM node appended to a stacking list), but is a plain synchronous `POST /api/pr/comments` — there is no job to poll, unlike an agent edit, since adding a draft comment is a single request/response rather than a dispatched external process.
-- Gutter markers: `diff.js`'s `renderDiff` calls the registered `prSyncHandler` after every repaint (mirroring how it already calls `syncDiffAgentTargets` for agent-edit range highlighting). `pr.js` matches draft comments to the diff's `[data-l]` elements — the same working-tree line-number anchors `selbar.js`'s `diffSelection` already produces for the agent-edit selection flow — and appends a small marker before `.diff-code`.
-- Launching another PR (**Git: Open Pull Request…** in the Command Palette) posts to `POST /api/pr/launch` (`pr.go`'s `handleLaunchPR`), which re-execs `os.Executable()` as `px0 pr <target>` and returns immediately — it does not wait for that child's checkout to succeed. The child opens its own browser tab through the same `openBrowser` path any `px0` invocation uses. A checkout failure in the child is therefore only visible in that child process's own terminal output, not surfaced back to the page that launched it; this is an accepted limitation of the fire-and-forget model, not an oversight.
+### URL Matching & Routing
+Pull requests are opened exclusively via `px0 <url>`. URL routing in `main.go` calls:
+```go
+provider, target, ok := DetectPRURL(arg0)
+```
+- Iterates over `defaultProviders` (which includes `&GitHubProvider{}`).
+- If a provider matches and successfully parses the URL, px0 enters PR review mode.
+- Bare numbers (e.g. `px0 123`) and file paths are never mistaken for PR targets; they are processed as regular filesystem paths.
+- Running `px0 pr` outputs an explicit error guiding the user to pass the URL directly.
 
 ---
 
-## Known Limitations (by design, not oversight)
+## 3. Checkout Lifecycle & Progress Narration
 
-- No live-updating a review session when new commits land on the PR while it's open — px0's git-awareness watches a local working tree's `.git` control files for changes; it has no equivalent for a remote ref. Reviewing a PR that's still being pushed to means closing and reopening `px0 pr <n>`.
-- No replying to or resolving comments that already exist on the PR (only new drafts, submitted as a new review).
-- No CI/checks status surfaced in the UI.
-- Draft comments are only accepted from a selection made in the diff view (`info.fromDiff` in `pr.js`), so every commentable line is one px0 itself considers part of the diff. If `diffBase` fell back to `HEAD` (§3, when the base branch couldn't be fetched), px0's hunks can diverge from what GitHub computes for the PR, and GitHub's review API rejects a line comment that isn't part of *its* diff. That failure only surfaces at submit time (a `422` from `submitReview`), not when the draft is added.
+`checkoutPR` (`pr.go`) executes the following sequence:
+
+```mermaid
+sequenceDiagram
+    participant CLI as CLI (main.go)
+    participant PR as PR Engine (pr.go)
+    participant Prov as GitProvider (github.go)
+    participant Git as Host Git CLI
+
+    CLI->>PR: checkoutPR(ctx, provider, target, cwd, onProgress, onMerged)
+    PR->>Prov: ResolveToken(cfg)
+    PR->>Prov: FetchPR(ctx, target, token)
+    Prov-->>PR: PRMeta (title, refs, state, merged)
+    alt PR is Merged
+        PR->>CLI: onMerged(meta)
+        CLI->>CLI: Prompt user [y/N] or check -y
+    end
+    PR->>Git: Local clone exists? (git remote get-url origin)
+    alt Matches Origin
+        PR->>Git: git fetch refs/pull/n/head:refs/px0/pr/n
+        PR->>Git: git worktree add --detach <tmp> refs/px0/pr/n
+    else External / Fork
+        PR->>Git: git clone --filter=blob:none --branch <headRef> <tmp>
+    end
+    PR->>Git: git fetch refs/heads/<baseRef> & git merge-base HEAD
+    PR->>Prov: CheckPushAccess(ctx, target, token)
+    PR-->>CLI: *prSession
+```
+
+### CLI Progress Narration
+`checkoutPR` accepts an `onProgress func(string)` callback. In `main.go`, this drives a smooth amber `uiSpinner`:
+1. `Fetching PR #... metadata from <provider>...`
+2. `Fetching PR #... head and preparing worktree...` (or cloning)
+3. `Computing merge base with <baseRef>...`
+4. `PR #... checked out (<title>)`
+
+### Already-Merged Confirmation
+When `meta.Merged` is true:
+1. `onMerged` stops the spinner.
+2. In interactive terminals, it asks:
+   ```text
+   ! PR #123 is already merged into main  <Title>
+     ? Open anyway? [y/N]
+   ```
+3. If the user declines (or in non-interactive environments without `-y`), `checkoutPR` returns `ErrPRMergedCancelled` and exits cleanly with code 0.
+4. If `-y` or `-yes` is supplied, it logs a warning and proceeds automatically.
+
+---
+
+## 4. Authentication & Push Access
+
+`GitHubProvider.ResolveToken` queries four sources in order:
+1. `github.token` in `settings.json` (or via Settings modal).
+2. `GITHUB_TOKEN` environment variable.
+3. `GH_TOKEN` environment variable.
+4. `gh auth token` (GitHub CLI session).
+
+### Fail-Closed Push Access
+`CheckPushAccess` queries `GET /repos/{owner}/{repo}` and extracts `permissions.push`. It **fails closed**: any network error, HTTP error, or missing permission field yields `false`.
+- Gating: `Server.handlePRMeta` passes `writeAccess` to the frontend.
+- Enforcement: `Server.handlePRSubmit` enforces push access server-side before accepting `APPROVE` or `REQUEST_CHANGES`.
+
+### Unauthenticated Read-Only Mode
+If no token is found:
+- Public repository metadata, worktree creation, and diff calculation proceed normally.
+- Draft comments can be created in memory and batch-applied locally with AI agents.
+- The CLI banner alerts the user:
+  ```text
+  access: read-only (no github token: set GITHUB_TOKEN or gh auth login to submit reviews)
+  ```
+
+---
+
+## 5. Merge-Base Diffing
+
+Unlike standard working tree diffs that compare against `HEAD`, PR reviews compare against the commit where the PR branch diverged from the base branch (the merge-base):
+
+```go
+func gitMergeBase(root, a, b string) string
+```
+
+- When the base branch ref is fetched, `diffBase` is set to `gitMergeBase(tmp, "HEAD", baseRef)`.
+- If base ref resolution fails, it gracefully falls back to `"HEAD"`.
+- `Server.diffBase` propagates this ref to `gitDiffAgainst` and `gitHunksAgainst`, ensuring both gutter markers and `Cmd/Ctrl+D` views display only what the PR changes.
+
+---
+
+## 6. Draft Comments, Submission & Batch Apply
+
+### In-Memory Drafts
+- `GET /api/pr/comments`: Returns current drafts.
+- `POST /api/pr/comments`: Appends a line comment (`Path`, `Line`, `Side`, `Body`). Allowed unauthenticated so reviewers can draft feedback locally.
+- `POST /api/pr/comments/delete`: Deletes a draft by ID.
+
+### Batch Apply with Coding Agents (`⚡ Batch Apply`)
+Users can delegate all drafted PR comments directly to an AI coding agent (Claude Code, Gemini CLI, Cursor Agent, Antigravity, etc.). The agent harness receives the comments as targeted editing instructions and modifies the worktree files directly.
+
+### Formal Review Submission
+- `POST /api/pr/submit`: Requires auth token.
+- Calls `provider.SubmitReview` which constructs a single review payload containing the head commit SHA, all drafted comments, and the review body/event (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`).
+- Clears in-memory drafts upon successful submission.
+
+---
+
+## 7. Frontend Integration
+
+- **Hover Line Pencil Icon (`web/src/linecomment.js`)**:
+  - Displays a subtle `✏` button when hovering over line numbers in source or diff views.
+  - Clicking opens a popover offering **Leave Comment on GitHub** (drafts PR review comment) or **Leave Comment for Inline Edit** (dispatches local AI agent).
+- **PR Header Bar (`web/src/pr.js`)**:
+  - Renders PR number, title, author, branch refs, and draft count badge.
+  - Toggles `#pr-merged-badge` (purple pill) when `meta.merged` is true.
+  - Houses **⚡ Batch Apply** and **Submit Review** controls.
+- **Child PR Launching**:
+  - Command Palette **Git: Open Pull Request…** posts to `/api/pr/launch`.
+  - Spawns `px0 -y <url>` in a new detached process on an ephemeral port.

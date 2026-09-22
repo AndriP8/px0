@@ -1,6 +1,6 @@
 import { S, apiPost, doc_ } from './state.js';
 import { updateSidebarToggleState, patchTreeGitStatus, treeEl, setSidebarMode } from './tree.js';
-import { drawTabs, loadGutter, closeTab } from './tabs.js';
+import { drawTabs, loadGutter, closeTab, reloadOpenTabs } from './tabs.js';
 import { syncDiffView } from './diff.js';
 import { render } from './renderer.js';
 import { updateStatus, updateMetricsDisplay } from './status.js';
@@ -109,45 +109,59 @@ async function handleGitStatus(data) {
   // Patch rendered tree items in place without full DOM reload
   await patchTreeGitStatus(statuses, dirtyDirs);
 
-  // Close tabs that were opened in git diff view or currently in diff view if their changes are gone
-  for (let i = S.tabs.length - 1; i >= 0; i--) {
-    const t = S.tabs[i];
-    const code = statuses[t.path];
-    const isDiff = !!code && code !== 'U';
-    const wasDiff = !!(t.diffMode || t.openedInDiffView);
-    if (wasDiff && (t.diffAvailable || t.diffMode) && !isDiff) {
-      closeTab(i);
-    }
-  }
-
-  // Synchronize open tabs' diff badges
-  let tabsChanged = false;
-  for (const t of S.tabs) {
-    const code = statuses[t.path];
-    const isDiff = !!code && code !== 'U';
-    if (t.diffAvailable !== isDiff) {
-      t.diffAvailable = isDiff;
-      tabsChanged = true;
-    }
-  }
-  if (tabsChanged) {
-    drawTabs();
-  }
-
-  // Update active editor gutter and diff view if active document is affected
-  const curDoc = doc_();
-  if (curDoc) {
-    const curCode = statuses[curDoc.path];
-    const hasDiff = !!curCode && curCode !== 'U';
-
-    if (curDoc.diffAvailable !== hasDiff || curCode) {
-      curDoc.diffAvailable = hasDiff;
-      await loadGutter(curDoc);
-      render();
-      if (curDoc.diffMode) {
-        syncDiffView(true);
+  // Close tabs that were opened in git diff view or currently in diff view if their changes are gone.
+  // In PR review mode, tabs should remain open even if clean relative to HEAD.
+  if (!S.meta?.pr) {
+    for (let i = S.tabs.length - 1; i >= 0; i--) {
+      const t = S.tabs[i];
+      const code = statuses[t.path];
+      const isDiff = !!code && code !== 'U';
+      const wasDiff = !!(t.diffMode || t.openedInDiffView);
+      if (wasDiff && (t.diffAvailable || t.diffMode) && !isDiff) {
+        closeTab(i);
       }
-      updateStatus();
+    }
+  }
+
+  // Check if any open tabs are affected by modifications
+  const anyTabModified = S.tabs.some(t => {
+    const code = statuses[t.path];
+    return code && code !== 'U';
+  });
+
+  if (anyTabModified) {
+    // In-place reload of open tabs updates file lines, syntax highlighting, and diff view live
+    await reloadOpenTabs();
+  } else {
+    // Synchronize open tabs' diff badges
+    let tabsChanged = false;
+    for (const t of S.tabs) {
+      const code = statuses[t.path];
+      const isDiff = !!code && code !== 'U';
+      if (t.diffAvailable !== isDiff) {
+        t.diffAvailable = isDiff;
+        tabsChanged = true;
+      }
+    }
+    if (tabsChanged) {
+      drawTabs();
+    }
+
+    // Update active editor gutter and diff view if active document is affected
+    const curDoc = doc_();
+    if (curDoc) {
+      const curCode = statuses[curDoc.path];
+      const hasDiff = !!curCode && curCode !== 'U';
+
+      if (curDoc.diffAvailable !== hasDiff || curCode) {
+        curDoc.diffAvailable = hasDiff;
+        await loadGutter(curDoc);
+        render();
+        if (curDoc.diffMode) {
+          syncDiffView(true);
+        }
+        updateStatus();
+      }
     }
   }
 }

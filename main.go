@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -41,9 +43,11 @@ func main() {
 		noTelemetry  = flag.Bool("no-telemetry", false, "disable anonymous usage telemetry")
 		agentCmd     = flag.String("agent", "", "pin the coding harness used for edits (claude, gemini, cursor-agent, agy, opencode, codex, aider, goose, or a command template containing {prompt}); detected and chosen in the UI when omitted")
 		noAgent      = flag.Bool("no-agent", false, "do not offer editing through a coding harness")
+		yesFlag      = flag.Bool("y", false, "answer yes to prompts (e.g. open already merged PRs)")
+		yesFlagLong  = flag.Bool("yes", false, "answer yes to prompts (alias for -y)")
 	)
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "px0 %s - a code navigator\n\nusage: px0 [flags] [file or directory]\n\nflags:\n", version)
+		fmt.Fprintf(os.Stderr, "px0 %s - a code navigator\n\nusage:\n  px0 [flags] [file or directory]\n  px0 [flags] <pr-url>\n\nflags:\n", version)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -80,47 +84,70 @@ func main() {
 		}
 	}
 
-	// A "pr" subcommand, or a bare github.com pull request URL, checks out
-	// the PR's full source tree instead of resolving a local file/directory.
+	// A full pull request URL (e.g. https://github.com/owner/repo/pull/123)
+	// checks out the PR's full source tree instead of resolving a local file/directory.
+	// Only full URLs via "px0 <url>" are supported for PR review.
 	target := "."
-	var prOwner, prRepo string
-	var prNum int
+	var prProvider GitProvider
+	var prTarget PRTarget
 	isPR := false
 	if flag.NArg() > 0 {
-		switch {
-		case flag.Arg(0) == "pr":
-			if flag.NArg() < 2 {
-				fatal(fmt.Errorf("usage: px0 pr <number-or-url>"))
-			}
-			owner, repo, num, err := parsePRTarget(flag.Arg(1), ".")
-			if err != nil {
-				fatal(err)
-			}
-			prOwner, prRepo, prNum, isPR = owner, repo, num, true
-		case isGitHubPRURL(flag.Arg(0)):
-			owner, repo, num, err := parsePRTarget(flag.Arg(0), ".")
-			if err != nil {
-				fatal(err)
-			}
-			prOwner, prRepo, prNum, isPR = owner, repo, num, true
-		default:
-			target = flag.Arg(0)
+		arg0 := flag.Arg(0)
+		if arg0 == "pr" {
+			fatal(fmt.Errorf("'px0 pr' is no longer supported; open pull requests directly with: px0 <url>"))
+		}
+		if provider, pt, ok := DetectPRURL(arg0); ok {
+			prProvider, prTarget, isPR = provider, pt, true
+		} else {
+			target = arg0
 		}
 	}
 	if isPR && gitDisabled {
-		fatal(fmt.Errorf("px0 pr: git is required for PR review; remove -no-git"))
+		fatal(fmt.Errorf("px0: git is required for PR review; remove -no-git"))
 	}
 
 	var pr *prSession
 	var root, initialFile string
 	var initialLine int
 	if isPR {
+		autoYes := *yesFlag || *yesFlagLong
+		sp := newSpinner(fmt.Sprintf("Preparing PR #%d (%s/%s)...", prTarget.Number, prTarget.Owner, prTarget.Repo), os.Stdout)
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		p, err := checkoutPR(ctx, prOwner, prRepo, prNum, ".")
+		confirmMerged := func(meta PRMeta) (bool, error) {
+			sp.Stop()
+			if autoYes {
+				uiStatus("warn", fmt.Sprintf("PR #%d is already merged into %s", meta.Number, meta.BaseRef), "continuing (-y)", 0, os.Stdout)
+				return true, nil
+			}
+			if !isTTY(os.Stdin) {
+				uiStatus("warn", fmt.Sprintf("PR #%d is already merged into %s", meta.Number, meta.BaseRef), "use -y to open in non-interactive environments", 0, os.Stdout)
+				return false, nil
+			}
+			fmt.Println()
+			uiStatus("warn", fmt.Sprintf("PR #%d is already merged into %s", meta.Number, meta.BaseRef), meta.Title, 0, os.Stdout)
+			fmt.Fprintf(os.Stdout, "  %s %s", uiAccent("?", os.Stdout), "Open anyway? [y/N] ")
+			reader := bufio.NewReader(os.Stdin)
+			line, _ := reader.ReadString('\n')
+			answer := strings.TrimSpace(strings.ToLower(line))
+			if answer == "y" || answer == "yes" {
+				sp = newSpinner(fmt.Sprintf("Continuing with PR #%d (%s/%s)...", prTarget.Number, prTarget.Owner, prTarget.Repo), os.Stdout)
+				return true, nil
+			}
+			fmt.Println("Aborted.")
+			return false, nil
+		}
+		p, err := checkoutPR(ctx, prProvider, prTarget, ".", func(msg string) {
+			sp.Update(msg)
+		}, confirmMerged)
 		cancel()
 		if err != nil {
-			fatal(fmt.Errorf("px0 pr: %w", err))
+			if errors.Is(err, ErrPRMergedCancelled) {
+				os.Exit(0)
+			}
+			sp.Fail(fmt.Sprintf("Failed to prepare PR #%d: %v", prTarget.Number, err))
+			fatal(fmt.Errorf("px0: %w", err))
 		}
+		sp.Success(fmt.Sprintf("PR #%d checked out (%s)", prTarget.Number, p.meta.Title))
 		pr = p
 		root = p.Root()
 	} else {
@@ -159,7 +186,14 @@ func main() {
 	url := viewerURL(addr, initialFile, initialLine)
 	uiHeading("px0 "+version, nil, os.Stdout)
 	if pr != nil {
-		uiKV("PR", fmt.Sprintf("#%d %s", pr.meta.Number, pr.meta.Title), 11, os.Stdout)
+		prTitle := fmt.Sprintf("#%d %s", pr.meta.Number, pr.meta.Title)
+		if pr.meta.Merged {
+			prTitle += " " + paint("[MERGED]", colorWarn, true, os.Stdout)
+		}
+		uiKV("PR", prTitle, 11, os.Stdout)
+		if pr.token == "" {
+			uiKV("access", uiDim(fmt.Sprintf("read-only (no %s token: set GITHUB_TOKEN or gh auth login to submit reviews)", pr.provider.Name()), os.Stdout), 11, os.Stdout)
+		}
 	}
 	uiKV("workspace", root, 11, os.Stdout)
 	uiKV("url", uiAccent(url, os.Stdout), 11, os.Stdout)

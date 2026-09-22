@@ -250,12 +250,21 @@ function splitSide(row, side) {
 function anchor(el, row) {
   if (row.newLine !== undefined) el.dataset.l = row.newLine;
   else if (row.at !== undefined) el.dataset.at = row.at;
+  if (row.oldLine !== undefined) el.dataset.oldL = row.oldLine;
 }
 
 function lineCell(n) {
   const el = document.createElement('div');
   el.className = 'diff-ln';
-  el.textContent = n === '' || n === undefined ? '' : String(n);
+  if (n !== '' && n !== undefined) {
+    const btn = document.createElement('span');
+    btn.className = 'line-btn';
+    btn.setAttribute('role', 'button');
+    btn.title = 'Comment or Edit';
+    btn.textContent = '✎';
+    el.append(btn);
+  }
+  el.append(document.createTextNode(n === '' || n === undefined ? '' : String(n)));
   return el;
 }
 

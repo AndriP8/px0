@@ -908,7 +908,7 @@ async function finish(session, j) {
    cursor and view across the swap. Two edits can finish close together, so
    reloads are queued rather than left to interleave. Returns whether it worked. */
 let reloadChain = Promise.resolve();
-function reloadWorkspace(focus, what = 'Changed') {
+export function reloadWorkspace(focus, what = 'Changed') {
   const run = async () => {
     try {
       await api('/api/reindex');

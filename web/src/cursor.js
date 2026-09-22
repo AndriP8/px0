@@ -206,6 +206,7 @@ export function initCursor() {
     // Only the primary button moves the caret: a right click opens a menu on
     // what is already selected and must leave it where it is.
     if (e.button !== 0) return;
+    if (e.target.closest('.line-btn')) return;
     const row = e.target.closest('.row');
     if (!row) return;
     const d = doc_(); if (!d) return;
