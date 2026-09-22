@@ -48,6 +48,8 @@ make dist
 - **Remote-First, Zero SSH Hassle**: Spin up on any remote server, cloud instance, or runner in < 1 ms. Inspect remote code in your local browser over a single port (Tailscale, WireGuard, reverse proxy, or tunnel) without SSH key setups, port forwarding churn, or remote extension daemons.
 - **Rich Syntax Highlighting**: Native tokenization for ~280 languages via Chroma with windowed rendering.
 - **Git Awareness & Visual Diffs**: Status badges (`M`, `A`, `D`, `U`, `R`), dirty folder ancestry propagation, changed-files filter, and side-by-side / unified diffs vs `HEAD` (`Cmd/Ctrl+D`).
+- **Git Panel: Stage, Commit, Push, Pull**: A sidebar panel stages files with a per-row tick, commits, pushes, and pulls (fast-forward only — a diverged history is refused rather than merged) without leaving the browser. **Commit with AI** dispatches your coding harness to write the commit message from the staged diff and commits with it in one action.
+- **GitHub Pull Request Review**: `px0 <pr-url>` checks out a PR's full source tree, diffs it against the merge-base with its target branch, and lets you draft inline review comments, batch-apply them with a coding agent, and submit Approve / Request Changes / Comment — all without leaving the browser.
 - **Edit with Your Coding Agent**: Select code in the source or diff view, right-click (or `Alt+E`), and describe the change. px0 runs Claude Code, OpenCode, OpenAI Codex, Antigravity, Aider, Goose, Gemini CLI, or Cursor Agent on it, reloads what changed, and shows harness errors inline. Several edits can run at once, as long as their line ranges don't overlap.
 - **Rendered Markdown Preview**: Full GFM preview with Chroma-highlighted code fences; switch between preview and source with `Alt+M` while preserving scroll.
 - **Custom Themes**: 14 built-in themes (GitHub Dark, Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Solarized, and more).
@@ -117,6 +119,37 @@ If the harness fails, the error appears inline under your instruction together w
 - Edits are accepted only from px0's own page, opened by IP address or `localhost`. Through a hostname (reverse proxy, tunnel domain) they are refused. Anyone who can reach px0 by IP can run the harness as you, so keep `-host 0.0.0.0` to private networks.
 - Nothing runs until you pick a harness. `-agent` pins one for the session; `-no-agent` turns editing off.
 
+## Git: Stage, Commit, Push, Pull
+
+Alongside read-only diffing, the sidebar's git panel handles the rest of the everyday git loop without a terminal:
+
+- **Stage / Unstage**: A tick button next to every changed file in the tree stages or unstages it. **Stage All** stages the whole working tree in one click.
+- **Commit**: Write a message (the box is monospace) and commit whatever is currently staged.
+- **Commit with AI**: Dispatches your selected coding harness with the staged diff (plus any instructions you've configured) to write the commit message, then commits with it — one button, no round trip through the textarea required.
+- **Push**: Pushes the current branch to its remote. On a PR review session (below), it pushes the checkout's `HEAD` to the pull request's actual head branch, which may be a fork.
+- **Pull**: Fast-forward only. If the branch has diverged, px0 refuses with a clear message instead of attempting a merge — resolving a real conflict is left to a terminal, on purpose.
+
+None of this runs automatically: every action is a deliberate click, and a failed push or pull never leaves the repository in a half-merged state.
+
+## GitHub Pull Request Review
+
+Open a pull request directly by its URL and review it like any other px0 workspace — full navigation, symbol outline, LSP intelligence, and search, plus a diff scoped to the PR:
+
+```bash
+px0 https://github.com/owner/repo/pull/123
+```
+
+px0 checks out the PR into a throwaway worktree or clone, computes the diff against the PR's merge-base with its target branch (not `HEAD`), and opens the review in your browser:
+
+- **Merge-base diffs**: The Changes view and `Cmd/Ctrl+D` show exactly what the PR changes, the same way GitHub's own diff does.
+- **Inline review comments**: Hover a line number or select a range and press `Alt+R` to draft a comment; drafts stay in memory until you submit.
+- **Batch Apply**: Dispatch every drafted comment to your coding agent at once, which edits the PR checkout directly.
+- **Submit reviews**: Comment, Approve, or Request Changes back to GitHub (Approve/Request Changes require push access).
+- **Edit and push back**: The git panel above works inside a PR checkout too — stage, commit, and push lands changes on the PR's actual branch (its fork, if it has one).
+- **Pull**: Re-fetches the PR's current head. If it's a clean fast-forward onto new commits someone else pushed, it updates the checkout and refreshes the diff and comments; a diverged history is refused, same as everywhere else.
+
+Read-only without a token: public repositories still check out, diff, and let you draft/batch-apply comments locally. Submitting a formal review needs auth, resolved in order from `github.token` in Settings, `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`.
+
 ## Settings & Configuration (`settings.json`)
 
 px0 provides a built-in Settings editor modeled after VS Code. Settings are stored per-user in `~/.px0/settings.json` (or `$XDG_CONFIG_HOME/px0/settings.json`), keeping your workspace repository clean.
@@ -152,6 +185,7 @@ px0 provides a built-in Settings editor modeled after VS Code. Settings are stor
 | `diffEditor.renderSideBySide` | `true` | `true`, `false` | Split vs. unified diff view |
 | `diffEditor.ignoreTrimWhitespace` | `true` | `true`, `false` | Ignore leading/trailing whitespace diffs |
 | `git.gutterIndicators` | `true` | `true`, `false` | Gutter change indicators |
+| `git.commitMessageInstruction` | `""` | any string (multi-line) | Extra instructions given to the coding harness when **Commit with AI** writes a commit message |
 | `explorer.compactFolders` | `true` | `true`, `false` | Collapse single-child directory chains |
 | `explorer.autoReveal` | `true` | `true`, `false` | Auto-scroll to active file in tree |
 | `files.exclude` | `**/.git, **/node_modules...` | Glob patterns | Exclude patterns from trees and searches |
@@ -384,8 +418,10 @@ For comprehensive technical deep-dives into the architecture, indexing, virtuali
 - `search.go` / `fuzzy.go`: High-performance substring and fuzzy file/symbol matching algorithms.
 - `lsp.go` / `lspnav.go` / `calls.go`: Lightweight JSON-RPC client communicating with local language servers over stdio, plus definitions, references and call trails.
 - `lspservers.go` / `lspsetup.go`: Language server registry, discovery, and install on request.
-- `agent.go` / `settings.go`: Coding harness discovery and dispatch, change detection, user configuration store (`~/.px0/settings.json`), and settings schema validation.
-- `web/`: Native zero-dependency ES module frontend (custom virtual scroll, syntax highlight rendering, tab manager).
+- `agent.go` / `settings.go`: Coding harness discovery and dispatch (file-range edits and file-free prompts, such as an AI-written commit message), change detection, user configuration store (`~/.px0/settings.json`), and settings schema validation.
+- `git.go`: Shell-out git plumbing — status, diffing, staging, committing, and the fast-forward-only push/pull used by both a plain workspace and a PR checkout.
+- `provider.go` / `github.go` / `pr.go`: Forge-agnostic `GitProvider` interface, the GitHub REST implementation, and PR checkout/review lifecycle (`px0 <pr-url>`), including pushing back to and fast-forward-pulling the PR's own head branch.
+- `web/`: Native zero-dependency ES module frontend (custom virtual scroll, syntax highlight rendering, tab manager, git panel, PR review UI).
 - `web/themes/`: One CSS file per colour theme, joined by the server into `/static/themes.css`. Token reference in [Styling & Themes](docs/internals/styling-and-themes.md).
 
 ## License

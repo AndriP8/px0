@@ -43,6 +43,7 @@ px0 stores all configuration in a single per-user global file (`~/.px0/settings.
 | `diffEditor.renderSideBySide` | Diff Editor | `true` | `true`, `false` | Split vs. unified diff view default |
 | `diffEditor.ignoreTrimWhitespace` | Diff Editor | `true` | `true`, `false` | Ignore whitespace differences in diffs |
 | `git.gutterIndicators` | Git | `true` | `true`, `false` | Visual change markers in gutter |
+| `git.commitMessageInstruction` | Git & Diff | `""` | any string (multi-line textarea) | Extra instructions given to the coding harness when the git panel's **Commit with AI** writes a commit message |
 | `explorer.compactFolders` | Explorer | `true` | `true`, `false` | Compact single-child directory chains |
 | `explorer.autoReveal` | Explorer | `true` | `true`, `false` | Auto-scroll to active file in tree |
 | `files.exclude` | Files | Default globs | Array of glob patterns | Exclude patterns from trees and searches |
