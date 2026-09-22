@@ -47,6 +47,7 @@ export function initGitPanel() {
   $('#git-commit')?.addEventListener('click', doCommit);
   $('#git-push')?.addEventListener('click', doPush);
   $('#git-pull')?.addEventListener('click', doPull);
+  $('#git-generate-msg')?.addEventListener('click', doGenerateMessage);
 
   updateGitPanelVisibility();
 }
@@ -72,7 +73,7 @@ export function updateGitPanel(payload) {
   if (countsEl) {
     const staged = payload?.staged ? Object.keys(payload.staged).length : 0;
     const changed = payload?.gitChanges || 0;
-    countsEl.textContent = changed ? staged + ' staged / ' + changed + ' changed' : '';
+    countsEl.textContent = changed ? staged + ' / ' + changed + ' staged' : '';
   }
 }
 
@@ -138,4 +139,73 @@ async function doPull() {
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+// Dispatches the selected coding harness to write a commit message for the
+// staged diff (honoring the git.commitMessageInstruction setting, see
+// settings.go), then polls the same /api/agent/job endpoint an inline edit
+// does until it finishes.
+async function doGenerateMessage() {
+  const btn = $('#git-generate-msg');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+  }
+  let job;
+  try {
+    job = await apiPostJson('/api/git/commit-message', {});
+  } catch (e) {
+    resetGenerateBtn(btn);
+    showToast('!', e.message || 'Could not start generation');
+    return;
+  }
+  pollCommitMessage(job.id, btn);
+}
+
+function resetGenerateBtn(btn) {
+  if (!btn) return;
+  btn.disabled = false;
+  btn.textContent = 'Commit with AI';
+}
+
+function pollCommitMessage(id, btn) {
+  const poll = async () => {
+    let j;
+    try {
+      j = await api('/api/agent/job?id=' + id);
+    } catch (e) {
+      resetGenerateBtn(btn);
+      showToast('!', e.message || 'Generation failed');
+      return;
+    }
+    if (j.running) {
+      const sec = Math.round((j.ms || 0) / 1000);
+      if (btn) btn.textContent = 'Generating... (' + sec + 's)';
+      setTimeout(poll, 600);
+      return;
+    }
+    resetGenerateBtn(btn);
+    if (j.error) {
+      showToast('!', (j.harness || 'agent') + ': ' + j.error);
+      return;
+    }
+    const text = cleanCommitMessage(j.stdout || j.log || '');
+    if (!text) {
+      showToast('!', 'Harness returned an empty message');
+      return;
+    }
+    const ta = $('#git-commit-msg');
+    if (ta) ta.value = text;
+    showToast('✓', 'Commit message generated');
+  };
+  setTimeout(poll, 400);
+}
+
+// Harnesses sometimes wrap output in a markdown code fence despite being
+// asked not to; strip that and surrounding whitespace before using it.
+function cleanCommitMessage(text) {
+  let t = text.trim();
+  const fence = t.match(/^```[a-z]*\n([\s\S]*?)\n```$/);
+  if (fence) t = fence[1].trim();
+  return t;
 }

@@ -905,6 +905,49 @@ func (m *agentManager) StartBatch(items []agentBatchItem, force bool) (*agentJob
 	return m.Job(job.ID), nil
 }
 
+// StartPrompt dispatches a one-shot prompt to the selected harness with no
+// target file -- used for generating text (e.g. a commit message) rather
+// than editing code. There is no file range to anchor an overlap check
+// against, so a prompt job is never blocked by, or blocks, a file edit.
+func (m *agentManager) StartPrompt(label, prompt string) (*agentJob, error) {
+	m.mu.Lock()
+	if m.args == nil {
+		m.mu.Unlock()
+		uiStatus("err", "agent", "prompt dispatch refused: no coding harness selected", 0, os.Stdout)
+		return nil, errAgentNone
+	}
+	args := m.args
+	name := m.selected
+	m.seq++
+	ctx, cancel := context.WithTimeout(context.Background(), agentTimeout)
+	job := &agentJob{
+		ID:      m.seq,
+		Harness: name,
+		Path:    label,
+		Running: true,
+		Changed: []string{},
+		Tracked: gitAvailable(m.root),
+		out:     &tailBuffer{max: agentLogBytes},
+		stderr:  &tailBuffer{max: agentLogBytes},
+		start:   time.Now(),
+		cancel:  cancel,
+	}
+	if m.jobs == nil {
+		m.jobs = map[int64]*agentJob{}
+	}
+	m.jobs[job.ID] = job
+	m.mu.Unlock()
+
+	modelStr := ""
+	if m.models != nil && m.models[name] != "" {
+		modelStr = fmt.Sprintf(" (%s)", m.models[name])
+	}
+	uiStatus("step", "agent", fmt.Sprintf("#%d %s%s · %s", job.ID, name, modelStr, label), 0, os.Stdout)
+
+	go m.run(ctx, cancel, job, args, prompt)
+	return m.Job(job.ID), nil
+}
+
 func (m *agentManager) run(ctx context.Context, cancel context.CancelFunc, job *agentJob, template []string, prompt string) {
 	defer cancel()
 	defer func() {
@@ -1162,6 +1205,23 @@ func agentBatchPrompt(items []itemWithSnippet) string {
 	}
 	b.WriteString("Edit the file(s) in place to carry out all of the above instructions. ")
 	b.WriteString("Change only what they ask for, coordinate changes cleanly, and do not explain the changes afterwards.")
+	return b.String()
+}
+
+// commitMessagePrompt asks the harness to write a commit message for the
+// currently staged diff. instruction is the user's
+// git.commitMessageInstruction setting (empty when unset), appended verbatim
+// so it can refine or override the base convention below.
+func commitMessagePrompt(diff, instruction string) string {
+	var b strings.Builder
+	b.WriteString("Write a git commit message for the staged changes below.\n")
+	b.WriteString("Rules: imperative mood, a concise summary line under 72 characters, a blank line before an optional body, and explain why rather than just what changed.\n")
+	b.WriteString("Output ONLY the commit message text -- no markdown code fences, no preamble, no explanation afterwards, and do not edit any files.\n")
+	if instruction != "" {
+		fmt.Fprintf(&b, "\nAdditional instructions from the user: %s\n", instruction)
+	}
+	b.WriteString("\nStaged diff:\n")
+	b.WriteString(diff)
 	return b.String()
 }
 

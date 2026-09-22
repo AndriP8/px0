@@ -29,6 +29,11 @@
         <button id="git-panel-collapse" class="pr-comments-collapse" title="Collapse">&#9662;</button>
       </div>
       <div id="git-panel-body" class="git-panel-body">
+        <div class="git-agent-picker">
+          <select id="git-harness" class="agent-harness-select" title="Coding harness"></select>
+          <select id="git-model" class="agent-model-select" title="Model"></select>
+          <button id="git-generate-msg" class="footer-btn git-generate-btn" title="Write a commit message from the staged diff using the selected coding harness">Commit with AI</button>
+        </div>
         <textarea id="git-commit-msg" class="git-commit-msg" rows="2" spellcheck="false" autocomplete="off" placeholder="Commit message..."></textarea>
         <div class="git-panel-actions">
           <button id="git-stage-all" class="footer-btn" title="Stage all changes">Stage All</button>

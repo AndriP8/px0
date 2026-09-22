@@ -16,20 +16,21 @@ type settings struct {
 	Agent  string            `json:"agent,omitempty"`
 	Models map[string]string `json:"models,omitempty"`
 
-	EditorFontSize             *float64 `json:"editor.fontSize,omitempty"`
-	EditorFontFamily           *string  `json:"editor.fontFamily,omitempty"`
-	EditorLineHeight           *float64 `json:"editor.lineHeight,omitempty"`
-	EditorTabSize              *int     `json:"editor.tabSize,omitempty"`
-	EditorWordWrap             *string  `json:"editor.wordWrap,omitempty"`
-	EditorLineNumbers          *string  `json:"editor.lineNumbers,omitempty"`
-	EditorVimMode              *bool    `json:"editor.vimMode,omitempty"`
-	EditorRenderWhitespace     *string  `json:"editor.renderWhitespace,omitempty"`
-	EditorMinimapEnabled       *bool    `json:"editor.minimap.enabled,omitempty"`
-	WorkbenchColorTheme        *string  `json:"workbench.colorTheme,omitempty"`
-	DiffEditorRenderSideBySide *bool    `json:"diffEditor.renderSideBySide,omitempty"`
-	MarkdownPreviewOpen        *bool    `json:"markdown.preview.open,omitempty"`
-	TelemetryEnabled           *bool    `json:"telemetry.enabled,omitempty"`
-	GitHubToken                *string  `json:"github.token,omitempty"`
+	EditorFontSize              *float64 `json:"editor.fontSize,omitempty"`
+	EditorFontFamily            *string  `json:"editor.fontFamily,omitempty"`
+	EditorLineHeight            *float64 `json:"editor.lineHeight,omitempty"`
+	EditorTabSize               *int     `json:"editor.tabSize,omitempty"`
+	EditorWordWrap              *string  `json:"editor.wordWrap,omitempty"`
+	EditorLineNumbers           *string  `json:"editor.lineNumbers,omitempty"`
+	EditorVimMode               *bool    `json:"editor.vimMode,omitempty"`
+	EditorRenderWhitespace      *string  `json:"editor.renderWhitespace,omitempty"`
+	EditorMinimapEnabled        *bool    `json:"editor.minimap.enabled,omitempty"`
+	WorkbenchColorTheme         *string  `json:"workbench.colorTheme,omitempty"`
+	DiffEditorRenderSideBySide  *bool    `json:"diffEditor.renderSideBySide,omitempty"`
+	MarkdownPreviewOpen         *bool    `json:"markdown.preview.open,omitempty"`
+	TelemetryEnabled            *bool    `json:"telemetry.enabled,omitempty"`
+	GitHubToken                 *string  `json:"github.token,omitempty"`
+	GitCommitMessageInstruction *string  `json:"git.commitMessageInstruction,omitempty"`
 }
 
 var settingsMu sync.Mutex
@@ -329,6 +330,14 @@ var settingsSchema = []settingSchemaItem{
 		Category:    "Agent / AI",
 		Type:        "boolean",
 		Default:     false,
+	},
+	{
+		Key:         "git.commitMessageInstruction",
+		Title:       "Commit Message Instructions",
+		Description: "Extra instructions given to the coding harness when it writes a commit message for the staged diff (e.g. \"Follow Conventional Commits\" or \"Reference the ticket number in the branch name\").",
+		Category:    "Git & Diff",
+		Type:        "textarea",
+		Default:     "",
 	},
 	{
 		Key:         "github.token",

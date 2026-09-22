@@ -79,6 +79,7 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/git/stage", s.handleGitStage)
 	s.mux.HandleFunc("/api/git/unstage", s.handleGitUnstage)
 	s.mux.HandleFunc("/api/git/commit", s.handleGitCommit)
+	s.mux.HandleFunc("/api/git/commit-message", s.handleGitCommitMessage)
 	s.mux.HandleFunc("/api/git/push", s.handleGitPush)
 	s.mux.HandleFunc("/api/git/pull", s.handleGitPull)
 	s.mux.HandleFunc("/api/search", s.handleSearch)
@@ -963,6 +964,38 @@ func (s *Server) handleGitCommit(w http.ResponseWriter, r *http.Request) {
 		s.gitWatcher.Trigger()
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleGitCommitMessage dispatches the selected coding harness to write a
+// commit message for the currently staged diff, honoring the
+// git.commitMessageInstruction setting. Returns an agent job the frontend
+// polls via the existing /api/agent/job, the same as an inline edit.
+func (s *Server) handleGitCommitMessage(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	if !s.agentOrFail(w) {
+		return
+	}
+	diff := gitStagedDiff(s.ix.Root())
+	if strings.TrimSpace(diff) == "" {
+		fail(w, http.StatusBadRequest, "nothing staged to generate a message for")
+		return
+	}
+	instruction := ""
+	if cfg := readSettings(); cfg.GitCommitMessageInstruction != nil {
+		instruction = strings.TrimSpace(*cfg.GitCommitMessageInstruction)
+	}
+	job, err := s.agent.StartPrompt("commit message", commitMessagePrompt(diff, instruction))
+	if err != nil {
+		code := http.StatusBadGateway
+		if errors.Is(err, errAgentNone) {
+			code = http.StatusBadRequest
+		}
+		fail(w, code, err.Error())
+		return
+	}
+	writeJSON(w, job)
 }
 
 // handleGitPush pushes the current branch to its remote -- or, in a PR

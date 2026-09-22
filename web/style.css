@@ -202,11 +202,29 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 .git-panel-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; }
 .git-commit-msg {
   background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
-  padding: 6px 8px; font: 12px var(--ui); resize: vertical; min-height: 40px;
+  padding: 6px 8px; font: 12px var(--mono); resize: vertical; min-height: 40px;
 }
 .git-commit-msg:focus { border-color: var(--accent); }
 .git-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.git-panel-actions .footer-btn,
+.git-generate-btn {
+  border: 1px solid var(--line); background: var(--bg3); border-radius: 4px;
+  height: 24px; padding: 3px 8px; opacity: 1;
+}
+.git-panel-actions .footer-btn:hover:not(:disabled),
+.git-generate-btn:hover:not(:disabled) {
+  border-color: var(--accent); background: var(--bg4);
+}
+.git-panel-actions .footer-btn:disabled,
+.git-generate-btn:disabled { opacity: .5; cursor: default; }
 .git-panel-actions .footer-btn { flex: 1 1 auto; justify-content: center; }
+
+/* Harness/model pickers stacked (the sidebar is too narrow for them side by
+   side, as in the batch-edit bar), with the AI commit action right below. */
+.git-agent-picker { display: flex; flex-direction: column; gap: 6px; }
+.git-agent-picker .agent-harness-select,
+.git-agent-picker .agent-model-select { width: 100%; max-width: none; }
+.git-generate-btn { width: 100%; justify-content: center; font-weight: 500; }
 
 /* ---------- search panel ---------- */
 .search-form { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
@@ -1712,6 +1730,12 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
 }
 .settings-input-num {
   width: 90px;
+}
+.settings-textarea {
+  width: 320px;
+  min-height: 64px;
+  resize: vertical;
+  line-height: 1.4;
 }
 .settings-select {
   background: var(--bg2);

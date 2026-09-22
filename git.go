@@ -236,6 +236,20 @@ func gitStagedPaths(root string) map[string]bool {
 	return staged
 }
 
+// gitStagedDiff returns the unified diff of the index (staged changes)
+// against HEAD, for handing to a coding harness asked to write a commit
+// message. Fails quiet -> "".
+func gitStagedDiff(root string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--no-color", "--cached").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // gitHasUncommittedChanges reports whether the working tree or index has any
 // changes at all (staged, unstaged, or untracked). Used to gate commit and
 // pull -- a pull is refused outright when there's anything uncommitted,

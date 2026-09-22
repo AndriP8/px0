@@ -625,6 +625,8 @@ function renderSettingsList() {
           ${step !== undefined ? `<span class="settings-tag tag-step">Step: <b>${step}</b></span>` : ''}
           ${presetPills}
         </div>`;
+    } else if (type === 'textarea') {
+      controlHtml = `<textarea class="settings-input settings-textarea" data-key="${esc(key)}" rows="3" spellcheck="false">${esc(String(val || ''))}</textarea>`;
     } else {
       const isSecret = item.secret || item.Secret;
       controlHtml = `<input type="${isSecret ? 'password' : 'text'}" class="settings-input" data-key="${esc(key)}" value="${esc(String(val || ''))}"${isSecret ? ' autocomplete="off"' : ''}>`;
