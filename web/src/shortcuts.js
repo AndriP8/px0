@@ -18,7 +18,7 @@ import { cycleTheme } from './theme.js';
 import { previewing, togglePreview, previewKey, selectPreview } from './markdown.js';
 import { toggleDiff } from './diff.js';
 import { openSettings, closeSettings, isSettingsOpen } from './settings.js';
-import { handleVimKeyDown, showVimHelp, closeVimHelp } from './vim.js';
+import { handleVimKeyDown, isVimEnabled, getVimMode, showVimHelp, closeVimHelp } from './vim.js';
 import { handleImageKey } from './imageview.js';
 import { submitBatch } from './agent.js';
 import { reindexWorkspace } from './panels.js';
@@ -100,6 +100,7 @@ export function initShortcuts() {
       const lb = $('#img-lightbox');
       if (lb && !lb.hidden) { lb.hidden = true; return; }
       if (!$('#vim-helpsheet')?.hidden) { closeVimHelp(); return; }
+      if (isVimEnabled() && getVimMode() !== 'NORMAL' && handleVimKeyDown(e)) return;
       if (isSettingsOpen()) { closeSettings(); return; }
       if (!overlay.hidden) { closePalette(); return; }
       if (!$('#helpsheet').hidden) { $('#helpsheet').hidden = true; return; }
