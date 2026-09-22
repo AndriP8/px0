@@ -198,6 +198,36 @@ func (ix *Index) Build() {
 	root := newIgnoreSet(nil)
 	root = root.child(readGitignore(ix.root, ""))
 
+	// Git status is computed up front, before the walk, rather than
+	// concurrently with it. It used to run in a goroutine so its ~80ms
+	// overlapped the tree scan, but the overlay was then only applied once,
+	// in a second pass after the *entire* walk finished -- so the root
+	// directory's early publish below (meant to show the tree instantly)
+	// carried no Dirty/Status info until the whole repo had been walked,
+	// which on a large repo could be seconds later. Doing it first means
+	// every node -- including the immediate root snapshot -- is published
+	// with correct git status from the start.
+	base := ix.DiffBase()
+	gs := gitStatusAgainst(ix.root, base)
+	dirtyDirs := map[string]bool{}
+	var gitFiles []string
+	if gs != nil {
+		for p := range gs {
+			gitFiles = append(gitFiles, p)
+			for i := strings.LastIndexByte(p, '/'); i >= 0; i = strings.LastIndexByte(p, '/') {
+				p = p[:i]
+				dirtyDirs[p] = true
+			}
+		}
+		sort.Slice(gitFiles, func(i, j int) bool {
+			si, sj := gs[gitFiles[i]], gs[gitFiles[j]]
+			if (si != "U") != (sj != "U") {
+				return si != "U"
+			}
+			return gitFiles[i] < gitFiles[j]
+		})
+	}
+
 	var (
 		mu       sync.Mutex
 		files    []FileEntry
@@ -205,13 +235,6 @@ func (ix *Index) Build() {
 		wg       sync.WaitGroup
 		sem      = make(chan struct{}, runtime.NumCPU()*4)
 	)
-
-	// git status only needs the repo root, not the walk result, so run it
-	// concurrently with the walk instead of serially after it — on large repos
-	// the ~80ms subprocess overlaps the tree scan rather than adding to it.
-	base := ix.DiffBase()
-	gsCh := make(chan map[string]string, 1)
-	go func() { gsCh <- gitStatusAgainst(ix.root, base) }()
 
 	var walk func(abs, rel string, ig *ignoreSet)
 	walk = func(abs, rel string, ig *ignoreSet) {
@@ -249,7 +272,7 @@ func (ix *Index) Build() {
 				continue
 			}
 			if isDir {
-				kids = append(kids, Node{Name: name, Path: childRel, Dir: true})
+				kids = append(kids, Node{Name: name, Path: childRel, Dir: true, Dirty: dirtyDirs[childRel]})
 				subdirs = append(subdirs, struct{ abs, rel string }{filepath.Join(abs, name), childRel})
 				continue
 			}
@@ -257,7 +280,7 @@ func (ix *Index) Build() {
 			if err != nil {
 				continue
 			}
-			kids = append(kids, Node{Name: name, Path: childRel, Size: info.Size()})
+			kids = append(kids, Node{Name: name, Path: childRel, Size: info.Size(), Status: gs[childRel]})
 			mu.Lock()
 			files = append(files, FileEntry{
 				Path: childRel, Name: name, Size: info.Size(),
@@ -301,43 +324,7 @@ func (ix *Index) Build() {
 
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 
-	// Overlay git working-tree status onto file nodes (computed concurrently with
-	// the walk above); nil when git is unavailable or off.
-	gs := <-gsCh
-
-	// Every ancestor directory of a changed file is dirty, so a collapsed folder
-	// can badge without the frontend fetching its subtree.
-	dirtyDirs := map[string]bool{}
-	var gitFiles []string
-	if gs != nil {
-		for p := range gs {
-			gitFiles = append(gitFiles, p)
-			for i := strings.LastIndexByte(p, '/'); i >= 0; i = strings.LastIndexByte(p, '/') {
-				p = p[:i]
-				dirtyDirs[p] = true
-			}
-		}
-		sort.Slice(gitFiles, func(i, j int) bool {
-			si, sj := gs[gitFiles[i]], gs[gitFiles[j]]
-			if (si != "U") != (sj != "U") {
-				return si != "U"
-			}
-			return gitFiles[i] < gitFiles[j]
-		})
-	}
-
 	ix.mu.Lock()
-	if gs != nil {
-		for _, kids := range children {
-			for i := range kids {
-				if kids[i].Dir {
-					kids[i].Dirty = dirtyDirs[kids[i].Path]
-				} else if code, ok := gs[kids[i].Path]; ok {
-					kids[i].Status = code
-				}
-			}
-		}
-	}
 	ix.gitChanges = len(gitFiles)
 	ix.gitFiles = gitFiles
 	ix.gitStatusMap = gs

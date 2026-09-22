@@ -101,6 +101,9 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/pr/comments/delete", s.handlePRCommentDelete)
 	s.mux.HandleFunc("/api/pr/submit", s.handlePRSubmit)
 	s.mux.HandleFunc("/api/pr/launch", s.handleLaunchPR)
+	s.mux.HandleFunc("/api/pr/existing-comments", s.handlePRExistingComments)
+	s.mux.HandleFunc("/api/pr/comments/issue", s.handlePRIssueCommentPost)
+	s.mux.HandleFunc("/api/pr/comments/review-reply", s.handlePRReviewCommentReply)
 	s.lastReq.Store(time.Now().UnixNano())
 	go s.scavenge()
 	return s
@@ -388,17 +391,19 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		p := s.pr
 		p.mu.Lock()
 		meta["pr"] = map[string]any{
-			"number":      p.meta.Number,
-			"title":       p.meta.Title,
-			"author":      p.meta.Author,
-			"base":        p.meta.BaseRef,
-			"head":        p.meta.HeadRef,
-			"state":       p.meta.State,
-			"merged":      p.meta.Merged,
-			"mergedAt":    p.meta.MergedAt,
-			"writeAccess": p.writeAccess,
-			"readOnly":    p.token == "",
-			"draftCount":  len(p.comments),
+			"number":          p.meta.Number,
+			"title":           p.meta.Title,
+			"author":          p.meta.Author,
+			"base":            p.meta.BaseRef,
+			"head":            p.meta.HeadRef,
+			"state":           p.meta.State,
+			"merged":          p.meta.Merged,
+			"mergedAt":        p.meta.MergedAt,
+			"writeAccess":     p.writeAccess,
+			"readOnly":        p.token == "",
+			"draftCount":      len(p.comments),
+			"diffBaseWarning": p.diffBaseWarning,
+			"url":             p.target.URL,
 		}
 		p.mu.Unlock()
 	}

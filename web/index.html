@@ -48,11 +48,14 @@
     <!-- PR review bar: shown only when this session is `px0 pr ...` (web/src/pr.js) -->
     <div id="pr-bar" class="pr-bar" hidden>
       <div class="pr-bar-row">
-        <span id="pr-badge" class="pr-badge"></span>
+        <a id="pr-link" class="pr-link" target="_blank" rel="noopener noreferrer" title="Open on GitHub">
+          <span id="pr-badge" class="pr-badge"></span>
+          <span id="pr-title" class="pr-title"></span>
+        </a>
         <span id="pr-merged-badge" class="pr-merged-badge" hidden>Merged</span>
-        <span id="pr-title" class="pr-title"></span>
         <span id="pr-refs" class="pr-refs"></span>
         <span class="grow"></span>
+        <span id="pr-diff-warning" class="pr-diff-warning" hidden>&#9888; diff base unresolved</span>
         <span id="pr-readonly-note" class="pr-readonly-note" hidden>Read-only &middot; no GitHub token configured</span>
         <span id="pr-draft-count" class="pr-draft-count"></span>
       </div>
@@ -233,6 +236,26 @@
           </div>
         </div>
       </template>
+    </div>
+
+    <!-- PR comments bottom panel: existing GitHub comments (top-level and
+         inline) plus your own draft review comments, open by default for the
+         life of a PR review session. web/src/pr.js owns everything in it. -->
+    <div id="pr-comments-panel" class="pr-comments-panel" hidden>
+      <div id="pr-comments-resizer" class="pr-comments-resizer" title="Drag to resize"></div>
+      <div class="pr-comments-panel-head">
+        <span class="pr-comments-panel-title">Comments</span>
+        <span id="pr-comments-count" class="pr-comments-count"></span>
+        <span class="grow"></span>
+        <button id="pr-comments-collapse" class="pr-comments-collapse" title="Collapse">&#9662;</button>
+      </div>
+      <div id="pr-comments-body" class="pr-comments-body">
+        <div id="pr-comments-list" class="pr-comments-list"></div>
+        <div id="pr-issue-compose" class="pr-issue-compose">
+          <textarea id="pr-issue-compose-body" class="pr-review-body" rows="2" spellcheck="false" autocomplete="off" placeholder="Write a new PR comment..."></textarea>
+          <button id="pr-issue-compose-send" class="footer-btn">Comment</button>
+        </div>
+      </div>
     </div>
 
     <!-- Floating Copy Toast Notification -->

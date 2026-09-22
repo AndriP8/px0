@@ -30,12 +30,13 @@ import (
 type prSession struct {
 	mu sync.Mutex
 
-	provider    GitProvider
-	target      PRTarget
-	meta        PRMeta
-	token       string
-	writeAccess bool
-	diffBase    string // merge-base(head, base branch), or "HEAD" if the base couldn't be resolved
+	provider        GitProvider
+	target          PRTarget
+	meta            PRMeta
+	token           string
+	writeAccess     bool
+	diffBase        string // merge-base(head, base branch), or "HEAD" if the base couldn't be resolved
+	diffBaseWarning string // set when diffBase fell back to "HEAD"; surfaced in the UI so an empty diff doesn't read as "no changes"
 
 	worktree string // temp checkout, removed in Close
 	srcRepo  string // the repo the worktree was registered against ("" for a plain clone)
@@ -132,36 +133,56 @@ func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd 
 	}
 	// Best-effort: fetch the base branch and compute a merge-base so review
 	// diffs show exactly what the PR changes rather than the head's full
-	// HEAD diff. If this fails (e.g. base branch was force-pushed away),
-	// fall back to HEAD -- still correct for the PR head's own worktree.
+	// HEAD diff. If this fails (e.g. base branch was force-pushed away, or
+	// the fetch itself failed), diffBase falls back to "HEAD" -- which diffs
+	// the checkout against its own HEAD and looks empty. That failure used to
+	// be swallowed silently; now it's logged and surfaced to the UI so a
+	// blank diff never reads as "no changes".
 	diffBase := "HEAD"
+	var fetchErr string
 	baseRefspec := fmt.Sprintf("refs/heads/%s:refs/px0/base/%d", meta.BaseRef, num)
 	baseRemote := "origin"
 	if srcRepo == "" {
 		baseRemote = fmt.Sprintf("https://github.com/%s/%s.git", target.Owner, target.Repo)
 	}
-	if _, err := exec.Command("git", "-C", tmp, "fetch", "--no-tags", baseRemote, baseRefspec).CombinedOutput(); err == nil {
-		if mb := gitMergeBase(tmp, "HEAD", fmt.Sprintf("refs/px0/base/%d", num)); mb != "" {
-			diffBase = mb
+	if out, err := exec.Command("git", "-C", tmp, "fetch", "--no-tags", baseRemote, baseRefspec).CombinedOutput(); err != nil {
+		fetchErr = strings.TrimSpace(string(out))
+		if fetchErr == "" {
+			fetchErr = err.Error()
 		}
+	} else if mb := gitMergeBase(tmp, "HEAD", fmt.Sprintf("refs/px0/base/%d", num)); mb != "" {
+		diffBase = mb
 	}
 	if diffBase == "HEAD" && srcRepo != "" {
 		if mb := gitMergeBase(tmp, "HEAD", "origin/"+meta.BaseRef); mb != "" {
 			diffBase = mb
+			fetchErr = "" // recovered via the local clone's own remote-tracking ref
+		}
+	}
+	var diffBaseWarning string
+	if diffBase == "HEAD" {
+		diffBaseWarning = fmt.Sprintf("could not resolve a merge-base with %s; diff will show no changes", meta.BaseRef)
+		if fetchErr != "" {
+			diffBaseWarning = fmt.Sprintf("%s (%s)", diffBaseWarning, fetchErr)
+		}
+		fmt.Fprintln(os.Stderr, "px0: warning:", diffBaseWarning)
+		if onProgress != nil {
+			onProgress("Warning: " + diffBaseWarning)
 		}
 	}
 
 	writeAccess := provider.CheckPushAccess(ctx, target, token)
 
 	return &prSession{
-		provider:    provider,
-		target:      target,
-		meta:        meta,
-		token:       token,
-		writeAccess: writeAccess,
-		diffBase:    diffBase,
-		worktree:    tmp,
-		srcRepo:     srcRepo,
+		provider:        provider,
+		target:          target,
+		meta:            meta,
+		token:           token,
+		writeAccess:     writeAccess,
+		diffBase:        diffBase,
+		diffBaseWarning: diffBaseWarning,
+		worktree:        tmp,
+		srcRepo:         srcRepo,
 	}, nil
 }
 
@@ -199,18 +220,111 @@ func (s *Server) handlePRMeta(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	writeJSON(w, map[string]any{
-		"number":      p.meta.Number,
-		"title":       p.meta.Title,
-		"author":      p.meta.Author,
-		"base":        p.meta.BaseRef,
-		"head":        p.meta.HeadRef,
-		"state":       p.meta.State,
-		"merged":      p.meta.Merged,
-		"mergedAt":    p.meta.MergedAt,
-		"writeAccess": p.writeAccess,
-		"readOnly":    p.token == "",
-		"draftCount":  len(p.comments),
+		"number":          p.meta.Number,
+		"title":           p.meta.Title,
+		"author":          p.meta.Author,
+		"base":            p.meta.BaseRef,
+		"head":            p.meta.HeadRef,
+		"state":           p.meta.State,
+		"merged":          p.meta.Merged,
+		"mergedAt":        p.meta.MergedAt,
+		"writeAccess":     p.writeAccess,
+		"readOnly":        p.token == "",
+		"draftCount":      len(p.comments),
+		"diffBaseWarning": p.diffBaseWarning,
+		"url":             p.target.URL,
 	})
+}
+
+// handlePRExistingComments fetches every comment already posted on the PR
+// (top-level and inline) directly from the forge -- always live, never
+// cached, since another reviewer may have commented since the page loaded.
+func (s *Server) handlePRExistingComments(w http.ResponseWriter, r *http.Request) {
+	if !s.prOrFail(w) {
+		return
+	}
+	p := s.pr
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	issue, review, err := p.provider.FetchComments(ctx, p.target, p.token)
+	if err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if issue == nil {
+		issue = []PRComment{}
+	}
+	if review == nil {
+		review = []PRComment{}
+	}
+	writeJSON(w, map[string]any{"issueComments": issue, "reviewComments": review})
+}
+
+// handlePRIssueCommentPost posts a new top-level PR comment immediately (not
+// part of the draft-then-submit review flow below, since GitHub's issue
+// comments aren't tied to a review). Used both for starting a new top-level
+// comment and for "replying" to one, since GitHub doesn't thread these.
+func (s *Server) handlePRIssueCommentPost(w http.ResponseWriter, r *http.Request) {
+	if !s.prOrFail(w) {
+		return
+	}
+	if !localPost(w, r) {
+		return
+	}
+	p := s.pr
+	if p.token == "" {
+		fail(w, http.StatusForbidden, "no auth token configured; posting comments requires a GitHub token")
+		return
+	}
+	var body struct {
+		Body string `json:"body"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+		fail(w, http.StatusBadRequest, "body is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	c, err := p.provider.PostIssueComment(ctx, p.target, p.token, strings.TrimSpace(body.Body))
+	if err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, c)
+}
+
+// handlePRReviewCommentReply posts an immediate, threaded reply to an
+// existing inline review comment (not a new draft: this bypasses the
+// draft-then-submit review flow, matching GitHub's own dedicated reply
+// endpoint, which posts right away).
+func (s *Server) handlePRReviewCommentReply(w http.ResponseWriter, r *http.Request) {
+	if !s.prOrFail(w) {
+		return
+	}
+	if !localPost(w, r) {
+		return
+	}
+	p := s.pr
+	if p.token == "" {
+		fail(w, http.StatusForbidden, "no auth token configured; posting comments requires a GitHub token")
+		return
+	}
+	var body struct {
+		CommentID int64  `json:"commentId"`
+		Body      string `json:"body"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || body.CommentID <= 0 || strings.TrimSpace(body.Body) == "" {
+		fail(w, http.StatusBadRequest, "commentId and body are required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	c, err := p.provider.ReplyToReviewComment(ctx, p.target, p.token, body.CommentID, strings.TrimSpace(body.Body))
+	if err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, c)
 }
 
 func (s *Server) handlePRComments(w http.ResponseWriter, r *http.Request) {

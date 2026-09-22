@@ -11,9 +11,13 @@ import { showToast } from './ui.js';
 import { setReviewHandler, SEL_MENU_ITEMS } from './selbar.js';
 import { diffview, setPRSyncHandler } from './diff.js';
 import { reloadWorkspace } from './agent.js';
+import { openFile } from './tabs.js';
+import { layout, render } from './renderer.js';
 
 let meta = null;      // this session's PR info: {number, title, base, head, writeAccess, readOnly}
 let comments = [];    // draft comments known to the server
+let issueComments = [];   // top-level PR conversation comments, already posted (fetched read-only)
+let reviewComments = [];  // inline diff-line comments, already posted (fetched read-only) -- may include replies
 
 const prBar = () => $('#pr-bar');
 const list = () => $('#pr-comment-list');
@@ -28,8 +32,34 @@ export function initPR() {
   setPRSyncHandler(renderMarkersForActiveDoc);
   injectFooterButton();
   wireBarButtons();
+  wireCommentsPanel();
   renderBar();
   refreshComments();
+  refreshExistingComments();
+}
+
+function fmtTime(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return iso;
+  }
+}
+
+// Comments already posted on GitHub -- top-level conversation and inline diff
+// comments -- fetched live (never cached) so another reviewer's activity
+// shows up on the next open of the panel or diff.
+async function refreshExistingComments() {
+  try {
+    const j = await api('/api/pr/existing-comments');
+    issueComments = j.issueComments || [];
+    reviewComments = j.reviewComments || [];
+    renderCommentsPanel();
+    renderMarkersForActiveDoc();
+  } catch {
+    // Best-effort: panel/gutter just stay empty on a transient failure.
+  }
 }
 
 async function refreshComments() {
@@ -37,6 +67,7 @@ async function refreshComments() {
     const j = await api('/api/pr/comments');
     comments = j.comments || [];
     renderBar();
+    renderCommentsPanel();
     renderMarkersForActiveDoc();
   } catch {
     // Read-only or a transient error: the bar still shows PR metadata.
@@ -48,6 +79,8 @@ function renderBar() {
   if (!b || !meta) return;
   b.hidden = false;
   $('#pr-badge').textContent = '#' + meta.number;
+  const link = $('#pr-link');
+  if (link) link.href = meta.url || '#';
   const mb = $('#pr-merged-badge');
   if (mb) mb.hidden = !meta.merged;
   $('#pr-title').textContent = meta.title;
@@ -58,6 +91,11 @@ function renderBar() {
     : '';
   const ro = $('#pr-readonly-note');
   if (ro) ro.hidden = !meta.readOnly;
+  const dw = $('#pr-diff-warning');
+  if (dw) {
+    dw.hidden = !meta.diffBaseWarning;
+    if (meta.diffBaseWarning) dw.title = meta.diffBaseWarning;
+  }
   const batchBtn = $('#pr-batch-apply');
   if (batchBtn) {
     const hasApplicable = comments.some(c => c.path && c.line && c.body?.trim());
@@ -69,6 +107,8 @@ function renderBar() {
   if (appBtn) appBtn.hidden = !meta.writeAccess;
   const cmtBtn = $('#pr-submit-comment');
   if (cmtBtn) cmtBtn.disabled = meta.readOnly;
+  const composeEl = $('#pr-issue-compose');
+  if (composeEl) composeEl.hidden = meta.readOnly;
 }
 
 function wireBarButtons() {
@@ -76,6 +116,28 @@ function wireBarButtons() {
   $('#pr-submit-comment')?.addEventListener('click', () => submitReview('COMMENT'));
   $('#pr-submit-request-changes')?.addEventListener('click', () => submitReview('REQUEST_CHANGES'));
   $('#pr-submit-approve')?.addEventListener('click', () => submitReview('APPROVE'));
+  $('#pr-issue-compose-send')?.addEventListener('click', sendNewIssueComment);
+}
+
+async function sendNewIssueComment() {
+  const ta = $('#pr-issue-compose-body');
+  if (!ta) return;
+  const body = ta.value.trim();
+  if (!body) return;
+  const btn = $('#pr-issue-compose-send');
+  if (btn) btn.disabled = true;
+  try {
+    const c = await apiPostJson('/api/pr/comments/issue', { body });
+    issueComments.push(c);
+    ta.value = '';
+    expandedKeys.add('issue:' + c.id);
+    renderCommentsPanel();
+    showToast('✓', 'Comment posted');
+  } catch (e) {
+    showToast('!', e.message || 'Could not post comment');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function batchApplyComments() {
@@ -155,6 +217,7 @@ async function submitReview(event) {
     if (bodyEl) bodyEl.value = '';
     closeAllComposers();
     renderBar();
+    renderCommentsPanel();
     renderMarkersForActiveDoc();
     showToast('✓', event === 'APPROVE' ? 'Review approved'
       : event === 'REQUEST_CHANGES' ? 'Changes requested'
@@ -205,8 +268,10 @@ export function openCommentComposer(info) {
     try {
       const c = await apiPostJson('/api/pr/comments', { path: info.path, line, side, body });
       comments.push(c);
+      expandedKeys.add('thread:' + threadKey(info.path, side, line));
       close();
       renderBar();
+      renderCommentsPanel();
       renderMarkersForActiveDoc();
     } catch (e) {
       errEl.hidden = false;
@@ -233,25 +298,308 @@ function renderMarkersForActiveDoc() {
   if (!diffview || diffview.hidden || !meta) return;
   const d = doc_();
   if (!d) return;
-  const byKey = new Map();
+  const draftsByKey = new Map();
   for (const c of comments) {
     if (c.path !== d.path) continue;
     const key = (c.side || 'RIGHT') + ':' + c.line;
-    if (!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key).push(c);
+    if (!draftsByKey.has(key)) draftsByKey.set(key, []);
+    draftsByKey.get(key).push(c);
+  }
+  // Existing (already-posted) review comments: replies carry the same
+  // path/line/side as their thread root, so grouping by key alone already
+  // gathers a whole thread together.
+  const existingByKey = new Map();
+  for (const c of reviewComments) {
+    if (c.path !== d.path) continue;
+    const key = (c.side || 'RIGHT') + ':' + c.line;
+    if (!existingByKey.has(key)) existingByKey.set(key, []);
+    existingByKey.get(key).push(c);
   }
   for (const el of diffview.querySelectorAll('.pr-comment-mark')) el.remove();
   for (const el of diffview.querySelectorAll('[data-l], [data-old-l]')) {
     const isOldOnly = el.dataset.oldL !== undefined && el.dataset.l === undefined;
-    const key = isOldOnly ? ('LEFT:' + el.dataset.oldL) : ('RIGHT:' + el.dataset.l);
-    const cs = byKey.get(key);
-    el.classList.toggle('pr-has-comment', !!cs);
-    if (!cs) continue;
+    const side = isOldOnly ? 'LEFT' : 'RIGHT';
+    const line = isOldOnly ? +el.dataset.oldL : +el.dataset.l;
+    const key = side + ':' + line;
+    const drafts = draftsByKey.get(key);
+    const existing = existingByKey.get(key);
+    el.classList.toggle('pr-has-comment', !!drafts || !!existing);
+    if (!drafts && !existing) continue;
     const badge = document.createElement('span');
     badge.className = 'pr-comment-mark';
-    badge.title = cs.map(c => c.body).join('\n\n');
+    const count = (existing?.length || 0) + (drafts?.length || 0);
+    badge.title = 'View ' + count + ' comment' + (count === 1 ? '' : 's');
     badge.textContent = '💬';
+    badge.addEventListener('click', e => {
+      e.stopPropagation();
+      revealThreadInPanel(threadKey(d.path, side, line));
+    });
     el.querySelector('.diff-code')?.before(badge);
+  }
+}
+
+/* ---------- bottom panel: existing comments + drafts, always open ---------- */
+
+function threadKey(path, side, line) { return path + '|' + (side || 'RIGHT') + ':' + line; }
+
+// Which accordion items ("issue:<id>" / "thread:<threadKey>") are expanded.
+// Persists across re-renders within the session so replying, adding a draft,
+// or a background refresh never silently collapses something you opened.
+const expandedKeys = new Set();
+
+function toggleAccordion(item) {
+  if (!item) return;
+  const key = item.dataset.acc;
+  const open = !item.classList.contains('open');
+  item.classList.toggle('open', open);
+  if (!key) return;
+  if (open) expandedKeys.add(key); else expandedKeys.delete(key);
+}
+
+function wireCommentsPanel() {
+  const panel = $('#pr-comments-panel');
+  if (panel) panel.hidden = false;
+
+  $('#pr-comments-collapse')?.addEventListener('click', () => {
+    panel?.classList.toggle('collapsed');
+    layout(); render();
+  });
+
+  const rz = $('#pr-comments-resizer');
+  if (rz && panel) {
+    let dragging = false;
+    rz.addEventListener('mousedown', e => {
+      dragging = true;
+      rz.classList.add('drag');
+      panel.classList.remove('collapsed');
+      e.preventDefault();
+    });
+    addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const bottom = panel.getBoundingClientRect().bottom;
+      const h = Math.max(80, Math.min(window.innerHeight * 0.8, bottom - e.clientY));
+      panel.style.height = h + 'px';
+      layout(); render();
+    });
+    addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      rz.classList.remove('drag');
+      layout(); render();
+    });
+  }
+
+  $('#pr-comments-list')?.addEventListener('click', e => {
+    const replyBtn = e.target.closest('.pr-issue-comment-reply-btn');
+    if (replyBtn) {
+      const ta = $('#pr-issue-compose-body');
+      if (ta) {
+        const prefix = replyBtn.dataset.author ? '@' + replyBtn.dataset.author + ' ' : '';
+        if (!ta.value.startsWith(prefix)) ta.value = prefix + ta.value;
+        ta.focus();
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+      }
+      return;
+    }
+    const loc = e.target.closest('.pr-comment-loc');
+    if (loc) {
+      openFile(loc.dataset.path, { line: +loc.dataset.line });
+      return;
+    }
+    const delBtn = e.target.closest('.pr-comment-delete-btn');
+    if (delBtn) {
+      deleteDraft(+delBtn.dataset.draftId);
+      return;
+    }
+    const sendBtn = e.target.closest('.reply-send');
+    if (sendBtn) {
+      const row = sendBtn.closest('.pr-comment-reply-row');
+      sendThreadReply(row);
+      return;
+    }
+    const head = e.target.closest('.acc-head');
+    if (head) toggleAccordion(head.closest('.acc-item'));
+  });
+
+  $('#pr-comments-list')?.addEventListener('keydown', e => {
+    if (!e.target.closest('.reply-input')) return;
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      sendThreadReply(e.target.closest('.pr-comment-reply-row'));
+    }
+  });
+}
+
+async function sendThreadReply(row) {
+  if (!row) return;
+  const ta = row.querySelector('.reply-input');
+  const body = ta?.value.trim();
+  if (!body) return;
+  const commentId = +row.dataset.replyTo;
+  const btn = row.querySelector('.reply-send');
+  if (btn) btn.disabled = true;
+  try {
+    const c = await apiPostJson('/api/pr/comments/review-reply', { commentId, body });
+    reviewComments.push(c);
+    renderCommentsPanel();
+    renderMarkersForActiveDoc();
+    showToast('✓', 'Reply posted');
+  } catch (e) {
+    showToast('!', e.message || 'Could not reply');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function deleteDraft(id) {
+  try {
+    await apiPostJson('/api/pr/comments/delete?id=' + id, {});
+    comments = comments.filter(c => c.id !== id);
+    renderBar();
+    renderCommentsPanel();
+    renderMarkersForActiveDoc();
+  } catch (e) {
+    showToast('!', e.message || 'Could not delete draft');
+  }
+}
+
+// Expands the panel if collapsed, opens the thread's accordion item, scrolls
+// to it, and briefly flashes it -- the gutter badge's click target now lands
+// here instead of opening a separate floating box.
+function revealThreadInPanel(key) {
+  const panel = $('#pr-comments-panel');
+  panel?.classList.remove('collapsed');
+  layout(); render();
+  const el = $('#pr-comments-list')?.querySelector('[data-thread-key="' + CSS.escape(key) + '"]');
+  if (!el) return;
+  if (!el.classList.contains('open')) toggleAccordion(el);
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1200);
+}
+
+// Every comment/thread is an accordion item: a clickable .acc-head (author,
+// time, a one-line ellipsized preview of the body) and an .acc-body that's
+// only in the flow when the item carries the 'open' class -- so a scan of
+// the panel is just headers until you click one open to read and reply.
+function issueCommentCardHtml(c) {
+  const key = 'issue:' + c.id;
+  const open = expandedKeys.has(key);
+  return '<div class="pr-comment-card acc-item' + (open ? ' open' : '') + '" data-acc="' + esc(key) + '">' +
+    '<div class="acc-head">' +
+      '<span class="acc-chevron">&#8250;</span>' +
+      '<span class="pr-issue-comment-author">' + esc(c.author || 'unknown') + '</span>' +
+      '<span class="pr-issue-comment-time">' + esc(fmtTime(c.createdAt)) + '</span>' +
+      '<span class="acc-preview">' + esc(c.body) + '</span>' +
+    '</div>' +
+    '<div class="acc-body">' +
+      '<div class="pr-issue-comment-body">' + esc(c.body) + '</div>' +
+      (meta && !meta.readOnly
+        ? '<button class="pr-issue-comment-reply-btn" data-author="' + esc(c.author || '') + '">Reply</button>'
+        : '') +
+    '</div>' +
+  '</div>';
+}
+
+function reviewCommentCardHtml(c) {
+  return '<div class="pr-comment-card' + (c.inReplyTo ? ' reply' : '') + '">' +
+    '<div class="pr-issue-comment-head">' +
+      '<span class="pr-issue-comment-author">' + esc(c.author || 'unknown') + '</span>' +
+      '<span class="pr-issue-comment-time">' + esc(fmtTime(c.createdAt)) + '</span>' +
+    '</div>' +
+    '<div class="pr-issue-comment-body">' + esc(c.body) + '</div>' +
+  '</div>';
+}
+
+function draftCardHtml(c) {
+  return '<div class="pr-comment-card draft">' +
+    '<div class="pr-issue-comment-head"><span class="pr-issue-comment-author">You (draft, not yet submitted)</span></div>' +
+    '<div class="pr-issue-comment-body">' + esc(c.body) + '</div>' +
+    '<div class="pr-comment-card-actions">' +
+      '<button class="pr-comment-delete-btn" data-draft-id="' + c.id + '">Delete draft</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function threadHtml(path, t, key) {
+  const sortedExisting = [...t.existing].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  const root = sortedExisting.find(c => !c.inReplyTo) || sortedExisting[0];
+  const loc = path + ':' + t.line + (t.side === 'LEFT' ? ' (base)' : '');
+  const itemsHtml = sortedExisting.map(reviewCommentCardHtml).join('');
+  const draftsHtml = t.drafts.map(draftCardHtml).join('');
+  const canReply = root && meta && !meta.readOnly;
+  const replyRow = canReply
+    ? '<div class="pr-comment-reply-row" data-reply-to="' + root.id + '">' +
+      '<textarea class="pr-review-body reply-input" rows="1" spellcheck="false" autocomplete="off" placeholder="Reply..."></textarea>' +
+      '<button class="footer-btn reply-send">Reply</button>' +
+      '</div>'
+    : '';
+  const accKey = 'thread:' + key;
+  const open = expandedKeys.has(accKey);
+  const total = sortedExisting.length + t.drafts.length;
+  const countBadge = total > 1 ? '<span class="acc-count">' + total + '</span>' : '';
+  const preview = root ? root.body : (t.drafts[0]?.body || '');
+  return '<div class="pr-comment-thread acc-item' + (open ? ' open' : '') + '" data-thread-key="' + esc(key) + '" data-acc="' + esc(accKey) + '">' +
+    '<div class="acc-head">' +
+      '<span class="acc-chevron">&#8250;</span>' +
+      '<span class="pr-comment-loc" data-path="' + esc(path) + '" data-line="' + t.line + '">' + esc(loc) + '</span>' +
+      '<span class="pr-issue-comment-author">' + esc(root ? (root.author || 'unknown') : 'you') + '</span>' +
+      countBadge +
+      '<span class="acc-preview">' + esc(preview) + '</span>' +
+    '</div>' +
+    '<div class="acc-body">' + itemsHtml + draftsHtml + replyRow + '</div>' +
+  '</div>';
+}
+
+function renderCommentsPanel() {
+  const listEl = $('#pr-comments-list');
+  const countEl = $('#pr-comments-count');
+  if (!listEl) return;
+
+  // Group existing review comments and local drafts by path, then by
+  // side:line -- a reply carries the same path/line/side as its thread
+  // root, so grouping by that key alone already gathers a whole thread.
+  const byPath = new Map();
+  const threadFor = (path, side, line) => {
+    if (!byPath.has(path)) byPath.set(path, new Map());
+    const m = byPath.get(path);
+    const key = threadKey(path, side, line);
+    if (!m.has(key)) m.set(key, { existing: [], drafts: [], side, line });
+    return m.get(key);
+  };
+  for (const c of reviewComments) {
+    if (!c.path) continue;
+    threadFor(c.path, c.side || 'RIGHT', c.line).existing.push(c);
+  }
+  for (const c of comments) {
+    if (!c.path) continue;
+    threadFor(c.path, c.side || 'RIGHT', c.line).drafts.push(c);
+  }
+
+  const totalReview = reviewComments.length + comments.length;
+  let html = '<div class="pr-comments-section-title">Conversation' +
+    (issueComments.length ? ' (' + issueComments.length + ')' : '') + '</div>';
+  html += issueComments.length
+    ? [...issueComments].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')).map(issueCommentCardHtml).join('')
+    : '<div class="pr-comments-empty">No top-level comments yet.</div>';
+
+  html += '<div class="pr-comments-section-title">Review comments' +
+    (totalReview ? ' (' + totalReview + ')' : '') + '</div>';
+  if (byPath.size === 0) {
+    html += '<div class="pr-comments-empty">No inline comments yet.</div>';
+  } else {
+    const entries = [];
+    for (const [path, threads] of byPath) {
+      for (const [key, t] of threads) entries.push([path, key, t]);
+    }
+    entries.sort((a, b) => a[0].localeCompare(b[0]) || a[2].line - b[2].line);
+    html += entries.map(([path, key, t]) => threadHtml(path, t, key)).join('');
+  }
+
+  listEl.innerHTML = html;
+  if (countEl) {
+    const n = issueComments.length + totalReview;
+    countEl.textContent = n ? String(n) : '';
   }
 }
 

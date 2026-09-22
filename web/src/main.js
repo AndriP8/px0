@@ -94,12 +94,32 @@ initLineComment();
   await refreshTree();
   initGitStream();
 
-  const hasGitChanges = !!(S.meta?.git && S.meta.gitChanges > 0);
-  if (hasGitChanges) {
-    await setSidebarMode('git');
-  } else {
-    setSidebarMode('files');
-  }
+  // Split into helpers so the readiness poll below can redo this once the
+  // background indexer (main.go's `go ix.Build()`) finishes: gitChanges/
+  // gitFiles are zero until then, so a session that loads before indexing
+  // completes (common right after `px0 <pr-url>`) would otherwise never
+  // auto-select a diff tab -- until the next manual reload.
+  const applyGitSidebarState = async () => {
+    const hasGitChanges = !!(S.meta?.git && S.meta.gitChanges > 0);
+    if (hasGitChanges) {
+      await setSidebarMode('git');
+    } else {
+      setSidebarMode('files');
+    }
+    return hasGitChanges;
+  };
+  const selectChangedFileTab = async () => {
+    if (S.tabs[S.active]?.diffAvailable) return;
+    const changedTabIdx = S.tabs.findIndex(t => t.diffAvailable);
+    if (changedTabIdx >= 0) {
+      switchTab(changedTabIdx);
+    } else if (S.meta.gitFiles && S.meta.gitFiles.length > 0) {
+      await openFile(S.meta.gitFiles[0]);
+      await revealFile(S.meta.gitFiles[0]);
+    }
+  };
+
+  let hasGitChanges = await applyGitSidebarState();
 
   const params = new URLSearchParams(window.location.search);
   const initialPath = params.get('path');
@@ -116,19 +136,8 @@ initLineComment();
       window.history.replaceState({}, '', cleanUrl);
     } catch {}
   } else {
-    const restored = await restoreWorkspaceTabs();
-    if (hasGitChanges) {
-      const hasActiveDiff = S.tabs[S.active]?.diffAvailable;
-      if (!hasActiveDiff) {
-        const changedTabIdx = S.tabs.findIndex(t => t.diffAvailable);
-        if (changedTabIdx >= 0) {
-          switchTab(changedTabIdx);
-        } else if (S.meta.gitFiles && S.meta.gitFiles.length > 0) {
-          await openFile(S.meta.gitFiles[0]);
-          await revealFile(S.meta.gitFiles[0]);
-        }
-      }
-    }
+    await restoreWorkspaceTabs();
+    if (hasGitChanges) await selectChangedFileTab();
   }
 
   if (document.fonts && document.fonts.ready) {
@@ -145,6 +154,10 @@ initLineComment();
           clearInterval(timer);
           S.meta = m;
           updateStatus();
+          if (!initialPath) {
+            hasGitChanges = await applyGitSidebarState();
+            if (hasGitChanges) await selectChangedFileTab();
+          }
         }
       } catch {
         clearInterval(timer);
