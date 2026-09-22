@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,13 @@ func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd 
 	tmp, err := os.MkdirTemp("", "px0-pr-*")
 	if err != nil {
 		return nil, err
+	}
+	// macOS TempDir lives under /var -> /private/var; git rev-parse
+	// --show-toplevel reports the resolved path, so leaving tmp unresolved
+	// makes gitStatusAgainst's toplevel-relative prefix check fail for every
+	// file, silently emptying the PR's diff/status view.
+	if resolved, err := filepath.EvalSymlinks(tmp); err == nil {
+		tmp = resolved
 	}
 	cleanup := func() { os.RemoveAll(tmp) }
 
