@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -67,6 +69,25 @@ func gitStatus(root string) map[string]string {
 	return gitStatusAgainst(root, "HEAD")
 }
 
+// repoRelKey returns a function mapping a git-porcelain path (always relative
+// to the repo toplevel) to a path relative to root, or false when it falls
+// outside root's subtree (root may be a subdirectory of the repo).
+func repoRelKey(info gitInfo, root string) func(string) (string, bool) {
+	prefix := ""
+	if rel, err := filepath.Rel(info.toplevel, root); err == nil && rel != "." {
+		prefix = filepath.ToSlash(rel) + "/"
+	}
+	return func(p string) (string, bool) {
+		if prefix == "" {
+			return p, true
+		}
+		if !strings.HasPrefix(p, prefix) {
+			return "", false // outside the served subtree
+		}
+		return p[len(prefix):], true
+	}
+}
+
 // gitStatusAgainst maps changed files relative to root against base.
 // When base is "HEAD" or empty, it returns working-tree changes only.
 // When base is an arbitrary commit or ref (such as a PR merge-base),
@@ -82,19 +103,7 @@ func gitStatusAgainst(root, base string) map[string]string {
 	}
 	// Porcelain paths are relative to the repo root regardless of -C, so strip
 	// the served root's offset within the repo to match the index's keys.
-	prefix := ""
-	if rel, err := filepath.Rel(info.toplevel, root); err == nil && rel != "." {
-		prefix = filepath.ToSlash(rel) + "/"
-	}
-	key := func(p string) (string, bool) {
-		if prefix == "" {
-			return p, true
-		}
-		if !strings.HasPrefix(p, prefix) {
-			return "", false // outside the served subtree
-		}
-		return p[len(prefix):], true
-	}
+	key := repoRelKey(info, root)
 
 	status := map[string]string{}
 	fields := strings.Split(string(out), "\x00")
@@ -197,6 +206,140 @@ func mapXY(xy string) string {
 	default: // M (modified), T (typechange) and anything else read as modified
 		return "M"
 	}
+}
+
+// gitStagedPaths maps repo-relative-to-served-root path -> true for every
+// file with staged (index) changes. Used to drive the stage tick in the file
+// tree and to gate gitCommit. Fails quiet: nil on any error or no repo.
+func gitStagedPaths(root string) map[string]bool {
+	info := gitProbe(root)
+	if !info.ok {
+		return nil
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--name-only", "--cached", "-z").Output()
+	if err != nil {
+		return nil
+	}
+	key := repoRelKey(info, root)
+	staged := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p == "" {
+			continue
+		}
+		if k, ok := key(p); ok {
+			staged[k] = true
+		}
+	}
+	if len(staged) == 0 {
+		return nil
+	}
+	return staged
+}
+
+// gitHasUncommittedChanges reports whether the working tree or index has any
+// changes at all (staged, unstaged, or untracked). Used to gate commit and
+// pull -- a pull is refused outright when there's anything uncommitted,
+// rather than risking it colliding with incoming changes.
+func gitHasUncommittedChanges(root string) bool {
+	if !gitAvailable(root) {
+		return false
+	}
+	out, err := exec.Command("git", "-C", root, "status", "--porcelain", "-uall").Output()
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
+// gitStage adds relpath to the index. An empty relpath (the served root
+// itself) means "stage everything", so a bare "Stage All" action can reuse
+// this instead of a separate endpoint.
+func gitStage(root, relpath string) error {
+	if relpath == "" {
+		relpath = "."
+	}
+	out, err := exec.Command("git", "-C", root, "add", "--", relpath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git add: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gitUnstage removes relpath from the index without touching the working tree.
+func gitUnstage(root, relpath string) error {
+	out, err := exec.Command("git", "-C", root, "reset", "--", relpath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git reset: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gitCommit commits whatever is currently staged. Refuses up front when
+// nothing is staged so the caller gets a clear message instead of git's own
+// "nothing to commit" noise.
+func gitCommit(root, message string) error {
+	if len(gitStagedPaths(root)) == 0 {
+		return errors.New("nothing staged to commit")
+	}
+	out, err := exec.Command("git", "-C", root, "commit", "-m", message).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// gitCurrentBranch returns the checked-out branch name, or "HEAD" when
+// detached (e.g. inside a PR review worktree).
+func gitCurrentBranch(root string) string {
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// errNotFastForward is returned by gitFFOnlyPull when fetching ref would not
+// fast-forward the current branch; resolving that is not supported.
+var errNotFastForward = errors.New("not a fast-forward")
+
+// gitFFOnlyPull fetches ref from remote and fast-forwards the current branch
+// onto it. It never touches history any other way: if the merge would not be
+// a clean fast-forward, it returns errNotFastForward without modifying
+// anything, leaving conflict resolution to the user in a terminal.
+func gitFFOnlyPull(root, remote, ref string) error {
+	if out, err := exec.Command("git", "-C", root, "fetch", "--no-tags", remote, ref).CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if _, err := exec.Command("git", "-C", root, "merge", "--ff-only", "FETCH_HEAD").CombinedOutput(); err != nil {
+		return errNotFastForward
+	}
+	return nil
+}
+
+// gitPush pushes the current branch to its configured remote. Returns
+// trimmed combined output so the caller can recognize specific failures
+// (e.g. no upstream configured) in the error text.
+func gitPush(root string) (string, error) {
+	out, err := exec.Command("git", "-C", root, "push").CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// gitPushSetUpstream pushes branch to remote and records it as the
+// upstream, for a first push when the branch has none configured yet.
+func gitPushSetUpstream(root, remote, branch string) (string, error) {
+	out, err := exec.Command("git", "-C", root, "push", "-u", remote, branch).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// gitUpstream returns the remote and remote-branch name of branch's
+// upstream (`@{u}`), or ok=false if none is configured.
+func gitUpstream(root, branch string) (remote, remoteBranch string, ok bool) {
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", branch+"@{u}").Output()
+	if err != nil {
+		return "", "", false
+	}
+	remote, remoteBranch, found := strings.Cut(strings.TrimSpace(string(out)), "/")
+	return remote, remoteBranch, found
 }
 
 // gitDiff returns the unified diff of relpath against HEAD. relpath is relative

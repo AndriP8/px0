@@ -38,6 +38,23 @@ export function initPR() {
   refreshExistingComments();
 }
 
+// Re-fetches PR metadata and comments after an external change to the
+// checkout -- specifically, the sidebar git panel's Pull fast-forwarding
+// onto a new PR head -- so the bar, diff-base warning, and comments reflect
+// the new state instead of the one captured at session start.
+export async function refreshPRMeta() {
+  if (!meta) return;
+  try {
+    const j = await api('/api/pr/meta');
+    meta = { ...meta, ...j };
+    renderBar();
+  } catch {
+    // Best-effort.
+  }
+  await refreshExistingComments();
+  await refreshComments();
+}
+
 function fmtTime(iso) {
   if (!iso) return '';
   try {

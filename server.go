@@ -76,6 +76,11 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/stream", s.handleEventStream)
 	s.mux.HandleFunc("/api/git/stream", s.handleEventStream)
 	s.mux.HandleFunc("/api/git/refresh", s.handleGitRefresh)
+	s.mux.HandleFunc("/api/git/stage", s.handleGitStage)
+	s.mux.HandleFunc("/api/git/unstage", s.handleGitUnstage)
+	s.mux.HandleFunc("/api/git/commit", s.handleGitCommit)
+	s.mux.HandleFunc("/api/git/push", s.handleGitPush)
+	s.mux.HandleFunc("/api/git/pull", s.handleGitPull)
 	s.mux.HandleFunc("/api/search", s.handleSearch)
 	s.mux.HandleFunc("/api/outline", s.handleOutline)
 	s.mux.HandleFunc("/api/def", s.handleDef)
@@ -881,6 +886,171 @@ func (s *Server) handleGitRefresh(w http.ResponseWriter, r *http.Request) {
 		"gitFiles":   files,
 		"statuses":   s.ix.GitStatusMap(),
 	})
+}
+
+func (s *Server) decodeGitPath(w http.ResponseWriter, r *http.Request) (rel string, ok bool) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil || body.Path == "" {
+		fail(w, http.StatusBadRequest, "path is required")
+		return "", false
+	}
+	_, rel, ok = s.safePath(body.Path)
+	if !ok {
+		fail(w, http.StatusBadRequest, "bad path")
+		return "", false
+	}
+	return rel, true
+}
+
+// handleGitStage adds a file to the index (POST {path}).
+func (s *Server) handleGitStage(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	rel, ok := s.decodeGitPath(w, r)
+	if !ok {
+		return
+	}
+	if err := gitStage(s.ix.Root(), rel); err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if s.gitWatcher != nil {
+		s.gitWatcher.Trigger()
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleGitUnstage removes a file from the index without touching the
+// working tree (POST {path}).
+func (s *Server) handleGitUnstage(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	rel, ok := s.decodeGitPath(w, r)
+	if !ok {
+		return
+	}
+	if err := gitUnstage(s.ix.Root(), rel); err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if s.gitWatcher != nil {
+		s.gitWatcher.Trigger()
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleGitCommit commits whatever is currently staged (POST {message}).
+func (s *Server) handleGitCommit(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || strings.TrimSpace(body.Message) == "" {
+		fail(w, http.StatusBadRequest, "message is required")
+		return
+	}
+	if err := gitCommit(s.ix.Root(), strings.TrimSpace(body.Message)); err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if s.gitWatcher != nil {
+		s.gitWatcher.Trigger()
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleGitPush pushes the current branch to its remote -- or, in a PR
+// review session, pushes the worktree's HEAD to the PR's actual head branch
+// (possibly a fork), which may itself be a fresh branch with no upstream.
+func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	if s.pr != nil {
+		if err := s.pr.Push(); err != nil {
+			fail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+		return
+	}
+	root := s.ix.Root()
+	out, err := gitPush(root)
+	if err != nil && strings.Contains(out, "has no upstream branch") {
+		if branch := gitCurrentBranch(root); branch != "" && branch != "HEAD" {
+			out, err = gitPushSetUpstream(root, "origin", branch)
+		}
+	}
+	if err != nil {
+		fail(w, http.StatusBadGateway, out)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleGitPull fast-forwards onto the latest remote -- or, in a PR review
+// session, the PR's current head. Never merges: a non-fast-forward is
+// refused outright (409), since resolving a real conflict isn't supported.
+func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
+	if !localPost(w, r) {
+		return
+	}
+	if s.pr != nil {
+		info, err := s.pr.Pull()
+		if err != nil {
+			status := http.StatusBadGateway
+			if errors.Is(err, errPRDiverged) {
+				status = http.StatusConflict
+			}
+			fail(w, status, err.Error())
+			return
+		}
+		s.pr.mu.Lock()
+		s.diffBase = s.pr.diffBase
+		s.pr.mu.Unlock()
+		if s.ix != nil {
+			s.ix.SetDiffBase(s.diffBase)
+		}
+		if s.gitWatcher != nil {
+			s.gitWatcher.Trigger()
+		}
+		writeJSON(w, map[string]any{"ok": true, "message": info})
+		return
+	}
+
+	root := s.ix.Root()
+	if gitHasUncommittedChanges(root) {
+		fail(w, http.StatusConflict, "commit or discard your local changes before pulling")
+		return
+	}
+	branch := gitCurrentBranch(root)
+	if branch == "" || branch == "HEAD" {
+		fail(w, http.StatusBadRequest, "not on a branch")
+		return
+	}
+	remote, remoteBranch, ok := gitUpstream(root, branch)
+	if !ok {
+		fail(w, http.StatusBadRequest, "no upstream branch configured for "+branch)
+		return
+	}
+	if err := gitFFOnlyPull(root, remote, remoteBranch); err != nil {
+		if errors.Is(err, errNotFastForward) {
+			fail(w, http.StatusConflict, fmt.Sprintf("can't fast-forward; %s has diverged from %s/%s -- resolve manually, not supported here", branch, remote, remoteBranch))
+			return
+		}
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if s.gitWatcher != nil {
+		s.gitWatcher.Trigger()
+	}
+	writeJSON(w, map[string]any{"ok": true, "message": "pulled the latest changes"})
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

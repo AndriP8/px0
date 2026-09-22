@@ -1,7 +1,8 @@
 // web/src/tree.js
-import { $, $$, esc, api, S } from './state.js';
+import { $, $$, esc, api, apiPostJson, S } from './state.js';
 import { openFile } from './tabs.js';
 import { setStatusNote } from './status.js';
+import { showToast } from './ui.js';
 
 export const treeEl = $('#tree');
 export const openDirs = new Set();
@@ -30,8 +31,9 @@ export async function drawTree(dir, container, depth) {
     const g = GIT_STATUS[c.status];
     const gc = g ? ' dirty ' + g[0] : '';
     const badge = g ? '<span class="gs" title="git: ' + g[1] + '">' + esc(c.status) + '</span>' : '';
+    const tick = g ? '<button class="stage-tick' + (c.staged ? ' staged' : '') + '" data-stage="' + esc(c.path) + '" title="' + (c.staged ? 'Unstage' : 'Stage') + '"></button>' : '';
     return '<div class="tr file' + ig + gc + '" data-file="' + esc(c.path) + '" style="padding-left:' + (pad + 12) + 'px" title="Open ' + esc(c.path) + note + '">' +
-      '<span class="ic" data-t="' + fileKind(c.name) + '"></span><span class="nm">' + esc(c.name) + '</span>' + badge + '</div>';
+      '<span class="ic" data-t="' + fileKind(c.name) + '"></span><span class="nm">' + esc(c.name) + '</span>' + badge + tick + '</div>';
   }).join('');
 }
 
@@ -138,7 +140,7 @@ export async function expandDirtyDirs(container = treeEl) {
   } catch {}
 }
 
-export async function patchTreeGitStatus(statuses = {}, dirtyDirs = {}) {
+export async function patchTreeGitStatus(statuses = {}, dirtyDirs = {}, staged = {}) {
   // 1. Update folder dirty classes
   const dirRows = treeEl.querySelectorAll('.tr.dir');
   for (const dirRow of dirRows) {
@@ -154,10 +156,12 @@ export async function patchTreeGitStatus(statuses = {}, dirtyDirs = {}) {
       fileRow.classList.remove('dirty', 'git-M', 'git-A', 'git-D', 'git-untracked', 'git-R');
       const badge = fileRow.querySelector('.gs');
       if (badge) badge.remove();
+      const tick = fileRow.querySelector('.stage-tick');
+      if (tick) tick.remove();
     }
   }
 
-  // 3. Update or apply badges for changed files
+  // 3. Update or apply badges + stage tick for changed files
   for (const [p, code] of Object.entries(statuses)) {
     const fileRow = treeEl.querySelector('[data-file="' + CSS.escape(p) + '"]');
     if (!fileRow) continue;
@@ -173,10 +177,21 @@ export async function patchTreeGitStatus(statuses = {}, dirtyDirs = {}) {
       }
       badge.title = 'git: ' + g[1];
       badge.textContent = code;
+      let tick = fileRow.querySelector('.stage-tick');
+      if (!tick) {
+        tick = document.createElement('button');
+        tick.className = 'stage-tick';
+        tick.dataset.stage = p;
+        fileRow.appendChild(tick);
+      }
+      tick.classList.toggle('staged', !!staged[p]);
+      tick.title = staged[p] ? 'Unstage' : 'Stage';
     } else {
       fileRow.classList.remove('dirty');
       const badge = fileRow.querySelector('.gs');
       if (badge) badge.remove();
+      const tick = fileRow.querySelector('.stage-tick');
+      if (tick) tick.remove();
     }
   }
 
@@ -234,6 +249,21 @@ export function initTree() {
   });
 
   treeEl.addEventListener('click', async e => {
+    const tick = e.target.closest('.stage-tick');
+    if (tick) {
+      e.stopPropagation();
+      const path = tick.dataset.stage;
+      const staged = tick.classList.toggle('staged'); // optimistic; the git-status stream reconciles it
+      tick.title = staged ? 'Unstage' : 'Stage';
+      try {
+        await apiPostJson(staged ? '/api/git/stage' : '/api/git/unstage', { path });
+      } catch (err) {
+        tick.classList.toggle('staged', !staged);
+        tick.title = staged ? 'Stage' : 'Unstage';
+        showToast('!', err.message || 'Could not update staging');
+      }
+      return;
+    }
     const dirRow = e.target.closest('[data-dir]');
     if (dirRow) {
       const path = dirRow.dataset.dir;

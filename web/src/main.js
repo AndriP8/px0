@@ -23,6 +23,7 @@ import { initSettings } from './settings.js';
 import { initVim } from './vim.js';
 import { initImageViewer } from './imageview.js';
 import { initGitStream } from './gitstream.js';
+import { initGitPanel } from './gitpanel.js';
 import { initPR } from './pr.js';
 import { initLineComment } from './linecomment.js';
 
@@ -33,6 +34,7 @@ initCursor();
 initHover();
 initSelectionBar();
 initTree();
+initGitPanel();
 initSearch();
 initOutline();
 initPanels();

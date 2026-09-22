@@ -18,6 +18,8 @@ type GitStatusPayload struct {
 	GitFiles   []string          `json:"gitFiles"`
 	Statuses   map[string]string `json:"statuses"`
 	DirtyDirs  map[string]bool   `json:"dirtyDirs,omitempty"`
+	Staged     map[string]bool   `json:"staged,omitempty"`
+	Branch     string            `json:"branch,omitempty"`
 }
 
 type GitWatcher struct {
@@ -172,13 +174,15 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 // Refresh runs an immediate UpdateGitStatus, broadcasts to subscribers if changed,
 // and returns the latest git status payload.
 func (gw *GitWatcher) Refresh() GitStatusPayload {
-	count, files, changed, statuses, dirtyDirs := gw.ix.UpdateGitStatus()
+	count, files, changed, statuses, dirtyDirs, staged := gw.ix.UpdateGitStatus()
 	payload := GitStatusPayload{
 		Git:        gitAvailable(gw.root),
 		GitChanges: count,
 		GitFiles:   files,
 		Statuses:   statuses,
 		DirtyDirs:  dirtyDirs,
+		Staged:     staged,
+		Branch:     gitCurrentBranch(gw.root),
 	}
 	if changed {
 		data, err := json.Marshal(payload)
@@ -224,6 +228,7 @@ func (gw *GitWatcher) Subscribe() (<-chan []byte, func()) {
 	if inGit {
 		count, files := gw.ix.GitChanges()
 		statuses := gw.ix.GitStatusMap()
+		staged := gw.ix.GitStagedMap()
 		dirtyDirs := map[string]bool{}
 		for p := range statuses {
 			for i := strings.LastIndexByte(p, '/'); i >= 0; i = strings.LastIndexByte(p, '/') {
@@ -237,6 +242,8 @@ func (gw *GitWatcher) Subscribe() (<-chan []byte, func()) {
 			GitFiles:   files,
 			Statuses:   statuses,
 			DirtyDirs:  dirtyDirs,
+			Staged:     staged,
+			Branch:     gitCurrentBranch(gw.root),
 		}
 		if data, err := json.Marshal(payload); err == nil {
 			initialMsg = []byte(fmt.Sprintf("event: git-status\ndata: %s\n\n", data))

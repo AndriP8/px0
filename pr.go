@@ -48,6 +48,53 @@ type prSession struct {
 // ErrPRMergedCancelled is returned when opening an already-merged PR is cancelled.
 var ErrPRMergedCancelled = errors.New("PR is already merged; opening cancelled")
 
+// computeDiffBase fetches the PR's base branch into worktree and returns a
+// merge-base with HEAD to diff against, so review diffs show exactly what
+// the PR changes rather than the head's full HEAD diff. Best-effort: if it
+// can't be resolved (e.g. the base branch was force-pushed away, or the
+// fetch itself failed), diffBase falls back to "HEAD" -- which diffs the
+// checkout against its own HEAD and looks empty -- with a warning explaining
+// why, so callers can surface it and a blank diff never reads as "no
+// changes". Shared by checkoutPR (initial checkout) and prSession.Pull
+// (re-sync after new commits land on the PR).
+func computeDiffBase(worktree, srcRepo string, target PRTarget, baseRef string, num int, onProgress func(string)) (diffBase, diffBaseWarning string) {
+	if onProgress != nil {
+		onProgress(fmt.Sprintf("Computing merge base with %s...", baseRef))
+	}
+	diffBase = "HEAD"
+	var fetchErr string
+	baseRefspec := fmt.Sprintf("refs/heads/%s:refs/px0/base/%d", baseRef, num)
+	baseRemote := "origin"
+	if srcRepo == "" {
+		baseRemote = fmt.Sprintf("https://github.com/%s/%s.git", target.Owner, target.Repo)
+	}
+	if out, err := exec.Command("git", "-C", worktree, "fetch", "--no-tags", baseRemote, baseRefspec).CombinedOutput(); err != nil {
+		fetchErr = strings.TrimSpace(string(out))
+		if fetchErr == "" {
+			fetchErr = err.Error()
+		}
+	} else if mb := gitMergeBase(worktree, "HEAD", fmt.Sprintf("refs/px0/base/%d", num)); mb != "" {
+		diffBase = mb
+	}
+	if diffBase == "HEAD" && srcRepo != "" {
+		if mb := gitMergeBase(worktree, "HEAD", "origin/"+baseRef); mb != "" {
+			diffBase = mb
+			fetchErr = "" // recovered via the local clone's own remote-tracking ref
+		}
+	}
+	if diffBase == "HEAD" {
+		diffBaseWarning = fmt.Sprintf("could not resolve a merge-base with %s; diff will show no changes", baseRef)
+		if fetchErr != "" {
+			diffBaseWarning = fmt.Sprintf("%s (%s)", diffBaseWarning, fetchErr)
+		}
+		fmt.Fprintln(os.Stderr, "px0: warning:", diffBaseWarning)
+		if onProgress != nil {
+			onProgress("Warning: " + diffBaseWarning)
+		}
+	}
+	return diffBase, diffBaseWarning
+}
+
 // checkoutPR fetches a PR's head ref and checks it out into a system temp
 // directory: a git worktree of cwd's origin when cwd is already a clone of
 // the same repo (the common case -- opened inside the repo), or a shallow
@@ -128,48 +175,7 @@ func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd 
 		}
 	}
 
-	if onProgress != nil {
-		onProgress(fmt.Sprintf("Computing merge base with %s...", meta.BaseRef))
-	}
-	// Best-effort: fetch the base branch and compute a merge-base so review
-	// diffs show exactly what the PR changes rather than the head's full
-	// HEAD diff. If this fails (e.g. base branch was force-pushed away, or
-	// the fetch itself failed), diffBase falls back to "HEAD" -- which diffs
-	// the checkout against its own HEAD and looks empty. That failure used to
-	// be swallowed silently; now it's logged and surfaced to the UI so a
-	// blank diff never reads as "no changes".
-	diffBase := "HEAD"
-	var fetchErr string
-	baseRefspec := fmt.Sprintf("refs/heads/%s:refs/px0/base/%d", meta.BaseRef, num)
-	baseRemote := "origin"
-	if srcRepo == "" {
-		baseRemote = fmt.Sprintf("https://github.com/%s/%s.git", target.Owner, target.Repo)
-	}
-	if out, err := exec.Command("git", "-C", tmp, "fetch", "--no-tags", baseRemote, baseRefspec).CombinedOutput(); err != nil {
-		fetchErr = strings.TrimSpace(string(out))
-		if fetchErr == "" {
-			fetchErr = err.Error()
-		}
-	} else if mb := gitMergeBase(tmp, "HEAD", fmt.Sprintf("refs/px0/base/%d", num)); mb != "" {
-		diffBase = mb
-	}
-	if diffBase == "HEAD" && srcRepo != "" {
-		if mb := gitMergeBase(tmp, "HEAD", "origin/"+meta.BaseRef); mb != "" {
-			diffBase = mb
-			fetchErr = "" // recovered via the local clone's own remote-tracking ref
-		}
-	}
-	var diffBaseWarning string
-	if diffBase == "HEAD" {
-		diffBaseWarning = fmt.Sprintf("could not resolve a merge-base with %s; diff will show no changes", meta.BaseRef)
-		if fetchErr != "" {
-			diffBaseWarning = fmt.Sprintf("%s (%s)", diffBaseWarning, fetchErr)
-		}
-		fmt.Fprintln(os.Stderr, "px0: warning:", diffBaseWarning)
-		if onProgress != nil {
-			onProgress("Warning: " + diffBaseWarning)
-		}
-	}
+	diffBase, diffBaseWarning := computeDiffBase(tmp, srcRepo, target, meta.BaseRef, num, onProgress)
 
 	writeAccess := provider.CheckPushAccess(ctx, target, token)
 
@@ -200,6 +206,93 @@ func (p *prSession) Close() {
 		exec.Command("git", "-C", p.srcRepo, "update-ref", "-d", fmt.Sprintf("refs/px0/base/%d", p.meta.Number)).Run()
 	}
 	os.RemoveAll(p.worktree)
+}
+
+// errPRDiverged is returned by Pull when the checkout can't be fast-forwarded
+// onto the PR's current head -- local commits, or a force-pushed head, that
+// don't share a straight-line history with what was fetched. Resolving that
+// is not supported: Pull never invokes git's merge machinery, only a reset
+// --hard onto an ancestor-verified fast-forward.
+var errPRDiverged = errors.New("local checkout has diverged from the PR head; resolve manually")
+
+// Pull re-fetches the PR's current head and, if it's a clean fast-forward,
+// resets the worktree onto it and refreshes meta.HeadSHA/diffBase to match.
+// Refuses outright when the worktree has uncommitted changes (nothing here
+// stashes) or when the fast-forward check fails, in which case the caller
+// should surface errPRDiverged as "not supported, resolve manually".
+func (p *prSession) Pull() (info string, err error) {
+	p.mu.Lock()
+	worktree, srcRepo, num := p.worktree, p.srcRepo, p.meta.Number
+	target, baseRef := p.target, p.meta.BaseRef
+	headRepoCloneURL, headRef := p.meta.HeadRepoCloneURL, p.meta.HeadRef
+	p.mu.Unlock()
+
+	if gitHasUncommittedChanges(worktree) {
+		return "", errors.New("commit or discard your local changes before pulling")
+	}
+
+	newRef := fmt.Sprintf("refs/px0/pr/%d", num)
+	if srcRepo != "" {
+		headRefspec := fmt.Sprintf("refs/pull/%d/head:%s", num, newRef)
+		if out, err := exec.Command("git", "-C", srcRepo, "fetch", "--no-tags", "origin", headRefspec).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git fetch PR head: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	} else {
+		cloneURL := headRepoCloneURL
+		if cloneURL == "" {
+			cloneURL = fmt.Sprintf("https://github.com/%s/%s.git", target.Owner, target.Repo)
+		}
+		if out, err := exec.Command("git", "-C", worktree, "fetch", "--no-tags", cloneURL, headRef).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git fetch PR head: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		newRef = "FETCH_HEAD"
+	}
+
+	if exec.Command("git", "-C", worktree, "merge-base", "--is-ancestor", newRef, "HEAD").Run() == nil {
+		return "already up to date", nil
+	}
+	if exec.Command("git", "-C", worktree, "merge-base", "--is-ancestor", "HEAD", newRef).Run() != nil {
+		return "", errPRDiverged
+	}
+	if out, err := exec.Command("git", "-C", worktree, "reset", "--hard", newRef).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git reset: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	shaOut, err := exec.Command("git", "-C", worktree, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
+	}
+	diffBase, diffBaseWarning := computeDiffBase(worktree, srcRepo, target, baseRef, num, nil)
+
+	p.mu.Lock()
+	p.meta.HeadSHA = strings.TrimSpace(string(shaOut))
+	p.diffBase = diffBase
+	p.diffBaseWarning = diffBaseWarning
+	p.mu.Unlock()
+
+	return "pulled the latest changes", nil
+}
+
+// Push pushes the worktree's current commit to the PR's actual head branch
+// on its head repo (which may be a fork). Never force: a rejection means the
+// head moved since this checkout or since the last Pull, and the caller
+// should Pull before trying again.
+func (p *prSession) Push() error {
+	p.mu.Lock()
+	worktree := p.worktree
+	cloneURL, headRef := p.meta.HeadRepoCloneURL, p.meta.HeadRef
+	target := p.target
+	p.mu.Unlock()
+
+	if cloneURL == "" {
+		cloneURL = fmt.Sprintf("https://github.com/%s/%s.git", target.Owner, target.Repo)
+	}
+	refspec := fmt.Sprintf("HEAD:refs/heads/%s", headRef)
+	out, err := exec.Command("git", "-C", worktree, "push", cloneURL, refspec).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git push: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- HTTP

@@ -4,6 +4,7 @@ import { drawTabs, loadGutter, closeTab, reloadOpenTabs } from './tabs.js';
 import { syncDiffView } from './diff.js';
 import { render } from './renderer.js';
 import { updateStatus, updateMetricsDisplay } from './status.js';
+import { updateGitPanel } from './gitpanel.js';
 
 let eventSource = null;
 let reconnectTimer = null;
@@ -105,9 +106,11 @@ async function handleGitStatus(data) {
 
   const statuses = data.statuses || {};
   const dirtyDirs = data.dirtyDirs || {};
+  const staged = data.staged || {};
 
   // Patch rendered tree items in place without full DOM reload
-  await patchTreeGitStatus(statuses, dirtyDirs);
+  await patchTreeGitStatus(statuses, dirtyDirs, staged);
+  updateGitPanel(data);
 
   // Close tabs that were opened in git diff view or currently in diff view if their changes are gone.
   // In PR review mode, tabs should remain open even if clean relative to HEAD.

@@ -151,6 +151,20 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 /* ---------- git status (tree) ---------- */
 /* One-letter badge on dirty files; colour by status, no literal colours. */
 .tr .gs { margin-left: auto; flex: none; font: 600 10px/1 var(--mono); padding: 0 4px; }
+/* Stage tick: only rendered on rows with a git status badge. Empty square,
+   filled + checkmark once staged. */
+.tr .stage-tick {
+  flex: none; width: 12px; height: 12px; margin-left: 4px; padding: 0;
+  border: 1px solid var(--faint); border-radius: 3px; background: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  opacity: .55; cursor: pointer;
+}
+.tr .stage-tick:hover { opacity: 1; border-color: var(--accent); }
+.tr .stage-tick.staged { background: var(--accent); border-color: var(--accent); opacity: 1; }
+.tr .stage-tick.staged::after {
+  content: ""; width: 3px; height: 6px; border: solid var(--accent-fg); border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg) translate(-1px, -1px);
+}
 .tr.git-M .nm, .tr.git-M .gs, .tr.git-R .nm, .tr.git-R .gs { color: var(--accent-fg); }
 .tr.git-A .nm, .tr.git-A .gs, .tr.git-untracked .nm, .tr.git-untracked .gs { color: var(--gi); }
 .tr.git-D .nm, .tr.git-D .gs { color: var(--gd); }
@@ -163,6 +177,36 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
    authoritative dirty flag from the backend, so even collapsed ones are known). */
 #tree.changed-only .tr.file:not(.dirty) { display: none; }
 #tree.changed-only .tw:not(:has(.dirty)) { display: none; }
+
+/* ---------- git panel (sidebar: stage/commit/push/pull) ---------- */
+.git-panel {
+  flex: none; display: flex; flex-direction: column;
+  height: 150px; min-height: 30px; max-height: 60vh;
+  position: relative; background: var(--bg2); border-top: 1px solid var(--line);
+}
+.git-panel[hidden] { display: none; }
+.git-panel.collapsed { height: auto !important; }
+.git-panel.collapsed .git-panel-body { display: none; }
+.git-panel.collapsed .pr-comments-collapse { transform: rotate(-90deg); }
+.git-panel-resizer {
+  position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: row-resize; z-index: 2;
+}
+.git-panel-resizer:hover, .git-panel-resizer.drag { background: var(--accent); opacity: 0.5; }
+.git-panel-head {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px; border-bottom: 1px solid var(--line); user-select: none;
+}
+.git-panel-head .grow { flex: 1; min-width: 0; }
+.git-branch { font: 600 12px var(--ui); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-counts { font: 11px var(--mono); color: var(--faint); flex: none; }
+.git-panel-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; }
+.git-commit-msg {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
+  padding: 6px 8px; font: 12px var(--ui); resize: vertical; min-height: 40px;
+}
+.git-commit-msg:focus { border-color: var(--accent); }
+.git-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.git-panel-actions .footer-btn { flex: 1 1 auto; justify-content: center; }
 
 /* ---------- search panel ---------- */
 .search-form { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
