@@ -15,7 +15,7 @@ import { reloadWorkspace } from './agent.js';
 let meta = null;      // this session's PR info: {number, title, base, head, writeAccess, readOnly}
 let comments = [];    // draft comments known to the server
 
-const bar = () => $('#pr-bar');
+const prBar = () => $('#pr-bar');
 const list = () => $('#pr-comment-list');
 
 export function initPR() {
@@ -44,7 +44,7 @@ async function refreshComments() {
 }
 
 function renderBar() {
-  const b = bar();
+  const b = prBar();
   if (!b || !meta) return;
   b.hidden = false;
   $('#pr-badge').textContent = '#' + meta.number;
