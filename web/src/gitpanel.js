@@ -112,7 +112,7 @@ export function updateGitPanel(payload) {
     const ahead = payload?.ahead ?? 0;
     pushBtn.disabled = ahead === 0;
     if (ahead > 0) {
-      pushBtn.textContent = `Push (${ahead}↑)`;
+      pushBtn.textContent = `Push (${ahead})`;
       pushBtn.title = `Push ${ahead} unpushed commit${ahead > 1 ? 's' : ''} to remote`;
     } else {
       pushBtn.textContent = 'Push';
@@ -125,7 +125,7 @@ export function updateGitPanel(payload) {
   if (pullBtn) {
     const behind = payload?.behind ?? 0;
     if (behind > 0) {
-      pullBtn.textContent = `Pull (${behind}↓)`;
+      pullBtn.textContent = `Pull (${behind})`;
       pullBtn.title = `Pull ${behind} incoming commit${behind > 1 ? 's' : ''} from remote`;
     } else {
       pullBtn.textContent = 'Pull';
