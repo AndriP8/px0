@@ -43,7 +43,7 @@ export function syncDiffView(force = false) {
     shown = want;
     diffview.hidden = !want;
     if (want) drawDiff(want, force);
-    else diffContent.replaceChildren();
+    else { diffContent.replaceChildren(); if (prSyncHandler) prSyncHandler(); }
   } else if (want && want.diffHunks !== undefined) {
     renderDiff(want);
   }
@@ -283,7 +283,7 @@ function lineCell(n) {
     const btn = document.createElement('span');
     btn.className = 'line-btn';
     btn.setAttribute('role', 'button');
-    btn.title = 'Comment or Edit';
+    btn.title = S.meta?.pr ? 'Add review comment' : 'Edit inline';
     btn.textContent = '✎';
     el.append(btn);
   }

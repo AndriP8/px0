@@ -157,6 +157,13 @@ async function sendNewIssueComment() {
   }
 }
 
+// Only the label swaps text; the icon markup (SVG + .footer-btn-label span,
+// see index.html) stays put so the button never reverts to a plain-text look.
+function setBatchBtnLabel(btn, text) {
+  const label = btn?.querySelector('.footer-btn-label');
+  if (label) label.textContent = text; else if (btn) btn.textContent = text;
+}
+
 async function batchApplyComments() {
   const applicable = comments.filter(c => c.path && c.line && c.body?.trim());
   if (!applicable.length) {
@@ -166,7 +173,7 @@ async function batchApplyComments() {
   const btn = $('#pr-batch-apply');
   if (btn) {
     btn.disabled = true;
-    btn.textContent = 'Applying...';
+    setBatchBtnLabel(btn, 'Applying...');
   }
   const edits = applicable.map(c => ({
     path: c.path,
@@ -176,12 +183,12 @@ async function batchApplyComments() {
   }));
   try {
     const job = await apiPostJson('/api/agent/batch', { edits });
-    showToast('⚡', `Batch applying ${edits.length} comments with ${job.harness || 'agent'}...`);
+    showToast('AI', `Batch applying ${edits.length} comments with ${job.harness || 'agent'}...`);
     pollPRBatch(job.id, applicable.length);
   } catch (e) {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '⚡ Batch Apply';
+      setBatchBtnLabel(btn, 'Batch Apply');
     }
     showToast('!', e.message || 'Could not dispatch batch edit');
   }
@@ -194,13 +201,13 @@ async function pollPRBatch(id, count) {
       const j = await api('/api/agent/job?id=' + id);
       if (j.running) {
         const sec = Math.round((j.ms || 0) / 1000);
-        if (btn) btn.textContent = `Applying... (${sec}s)`;
+        if (btn) setBatchBtnLabel(btn, `Applying... (${sec}s)`);
         setTimeout(poll, 600);
         return;
       }
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '⚡ Batch Apply';
+        setBatchBtnLabel(btn, 'Batch Apply');
       }
       if (j.error) {
         showToast('!', `Agent error: ${j.error}`);
@@ -213,7 +220,7 @@ async function pollPRBatch(id, count) {
     } catch (e) {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '⚡ Batch Apply';
+        setBatchBtnLabel(btn, 'Batch Apply');
       }
       showToast('!', e.message || 'Batch failed');
     }
@@ -244,15 +251,105 @@ async function submitReview(event) {
   }
 }
 
-/* ---------- inline draft comment composer ---------- */
+/* ---------- locating a diff row from a path/side/line ---------- */
+
+// Shared by the composer (to pin itself beside its line) and the gutter
+// markers below. Only searches the visible diff, and only when it's showing
+// the same file -- a composer for a file that isn't on screen has nothing to
+// find, which callers treat as "dock it instead" rather than an error.
+function findDiffRowEl(path, side, line) {
+  if (!diffview || diffview.hidden) return null;
+  const d = doc_();
+  if (!d || d.path !== path) return null;
+  for (const el of diffview.querySelectorAll('[data-l], [data-old-l]')) {
+    const isOldOnly = el.dataset.oldL !== undefined && el.dataset.l === undefined;
+    const elSide = isOldOnly ? 'LEFT' : 'RIGHT';
+    const elLine = isOldOnly ? +el.dataset.oldL : +el.dataset.l;
+    if (elSide === side && elLine === line) return el;
+  }
+  return null;
+}
+
+function flashDiffRow(el) {
+  el.classList.add('pr-line-flash');
+  setTimeout(() => el.classList.remove('pr-line-flash'), 1100);
+}
+
+/* ---------- inline draft comment composer ----------
+   Each open composer is pinned beside the diff row it's on (recomputed as
+   the diff scrolls) instead of sitting in one fixed spot -- so it never
+   drifts from the line it's actually commenting on, and opening one never
+   shifts the tabs or code beneath it (the list is an absolute overlay; see
+   .pr-comment-list in style.css). A composer for a file that isn't the one
+   on screen has no row to pin to, so it docks in the bottom-right corner
+   until you jump back to it (click its ref, or the file's own tab). */
 
 let seq = 0;
+const openBoxes = new Map(); // id -> { box, path, side, line }
+let trackingBound = false;
+
+function ensureTracking() {
+  if (trackingBound) return;
+  trackingBound = true;
+  let scheduled = false;
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => { scheduled = false; repositionAll(); });
+  };
+  diffview?.addEventListener('scroll', schedule);
+  addEventListener('resize', schedule);
+}
+
+function positionBox(entry) {
+  const { box, path, side, line } = entry;
+  const host = $('#editor');
+  const target = findDiffRowEl(path, side, line);
+  if (!host) return;
+  if (!target) {
+    box.classList.add('docked');
+    box.style.top = '';
+    box.style.left = '';
+    // Stack docked boxes bottom-up so several at once don't overlap.
+    const docked = [...openBoxes.values()].filter(e => e.box.classList.contains('docked'));
+    const i = Math.max(0, docked.indexOf(entry));
+    box.style.right = '16px';
+    box.style.bottom = (16 + i * (box.offsetHeight + 8)) + 'px';
+    return;
+  }
+  box.classList.remove('docked');
+  box.style.right = '';
+  box.style.bottom = '';
+  const hostRect = host.getBoundingClientRect();
+  const tRect = target.getBoundingClientRect();
+  const left = Math.min(hostRect.width - box.offsetWidth - 16, Math.max(16, tRect.left - hostRect.left));
+  let top = tRect.bottom - hostRect.top + 4;
+  top = Math.max(4, Math.min(top, hostRect.height - box.offsetHeight - 4));
+  box.style.left = left + 'px';
+  box.style.top = top + 'px';
+}
+
+function repositionAll() {
+  for (const entry of openBoxes.values()) positionBox(entry);
+}
+
+// Scrolls/switches back to the composer's line and calls it out, whether
+// it's pinned on screen already or you've since navigated elsewhere.
+async function revealComposer(entry) {
+  const { path, side, line } = entry;
+  if (!findDiffRowEl(path, side, line)) {
+    await openFile(path, { line });
+  }
+  positionBox(entry);
+  const target = findDiffRowEl(path, side, line);
+  if (target) { target.scrollIntoView({ block: 'center', behavior: 'smooth' }); flashDiffRow(target); }
+}
 
 export function openCommentComposer(info) {
   if (!meta) return;
   const id = 'prc' + (++seq);
   const box = document.createElement('div');
-  box.className = 'agent-box';
+  box.className = 'agent-box entering';
   box.dataset.id = id;
   const side = info.side || 'RIGHT';
   const line = side === 'LEFT' ? (info.delL1 || info.l1) : info.l1;
@@ -261,7 +358,7 @@ export function openCommentComposer(info) {
   const modEnter = keyLabel('Mod+Enter');
   box.innerHTML =
     '<div class="agent-head"><span class="sel-chip">Review Comment</span>' +
-    '<span class="agent-ref">' + esc(ref) + '</span>' +
+    '<span class="agent-ref" role="button" tabindex="0" title="Jump to this line">' + esc(ref) + '</span>' +
     '<span class="grow"></span><button class="agent-close" title="Close (Esc)">✕</button></div>' +
     '<div class="agent-compose">' +
     '<textarea class="agent-input" rows="3" spellcheck="false" autocomplete="off" placeholder="Leave a comment on this line... (' + esc(modEnter) + ' to add)"></textarea>' +
@@ -269,12 +366,25 @@ export function openCommentComposer(info) {
     '<div class="agent-foot"><span class="agent-hint">' + esc(modEnter) + ' to add, Esc to cancel</span>' +
     '<button class="agent-send" title="Add comment (' + esc(modEnter) + ')">Add Comment</button></div></div>';
 
+  const entry = { box, path: info.path, side, line };
+  openBoxes.set(id, entry);
+  ensureTracking();
+
   list().hidden = false;
   list().append(box);
+  positionBox(entry);
+  const target = findDiffRowEl(info.path, side, line);
+  if (target) { target.scrollIntoView({ block: 'center', behavior: 'smooth' }); flashDiffRow(target); }
   const ta = box.querySelector('.agent-input');
   ta.focus();
 
-  const close = () => { box.remove(); if (!list().children.length) list().hidden = true; };
+  box.querySelector('.agent-ref').addEventListener('click', () => revealComposer(entry));
+
+  const close = () => {
+    openBoxes.delete(id);
+    box.remove();
+    if (!list().children.length) list().hidden = true;
+  };
   box.querySelector('.agent-close').addEventListener('click', close);
 
   const send = async () => {
@@ -304,6 +414,7 @@ export function openCommentComposer(info) {
 
 function closeAllComposers() {
   const l = list();
+  openBoxes.clear();
   if (!l) return;
   l.replaceChildren();
   l.hidden = true;
@@ -311,8 +422,14 @@ function closeAllComposers() {
 
 /* ---------- gutter markers on the active diff ---------- */
 
+const COMMENT_ICON = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+
 function renderMarkersForActiveDoc() {
-  if (!diffview || diffview.hidden || !meta) return;
+  if (!meta) return;
+  // Runs whether or not a diff is on screen right now, so a composer whose
+  // file just scrolled out of (or into) view re-docks or re-pins itself.
+  repositionAll();
+  if (!diffview || diffview.hidden) return;
   const d = doc_();
   if (!d) return;
   const draftsByKey = new Map();
@@ -346,7 +463,7 @@ function renderMarkersForActiveDoc() {
     badge.className = 'pr-comment-mark';
     const count = (existing?.length || 0) + (drafts?.length || 0);
     badge.title = 'View ' + count + ' comment' + (count === 1 ? '' : 's');
-    badge.textContent = '💬';
+    badge.innerHTML = COMMENT_ICON;
     badge.addEventListener('click', e => {
       e.stopPropagation();
       revealThreadInPanel(threadKey(d.path, side, line));

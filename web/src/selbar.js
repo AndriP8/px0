@@ -27,6 +27,9 @@ export function setAgentHandler(fn) { agentHandler = fn; }
    `px0 pr ...` session. */
 let reviewHandler = null;
 export function setReviewHandler(fn) { reviewHandler = fn; }
+// Read-only accessor so the diff gutter's pencil (linecomment.js) can offer
+// "Add Review Comment" directly, without duplicating the registration.
+export function getReviewHandler() { return reviewHandler; }
 
 let current = null;   // the selection the bar is showing, or null when it is not
 let allText = null;   // Ctrl+A: promise of the S.selAll file's full text
