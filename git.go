@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -356,6 +357,48 @@ func gitUpstream(root, branch string) (remote, remoteBranch string, ok bool) {
 	return remote, remoteBranch, found
 }
 
+// gitAheadBehind returns the number of commits HEAD is ahead and behind its
+// upstream tracking branch (@{u}). If no upstream tracking branch is configured,
+// it checks against origin/<branch> if available, or counts local commits if a
+// remote is configured so initial publish pushes are permitted.
+func gitAheadBehind(root string) (ahead, behind int, hasUpstream bool) {
+	if !gitAvailable(root) {
+		return 0, 0, false
+	}
+	out, err := exec.Command("git", "-C", root, "rev-list", "--left-right", "--count", "HEAD...@{u}").Output()
+	if err == nil {
+		parts := strings.Fields(string(out))
+		if len(parts) >= 2 {
+			a, _ := strconv.Atoi(parts[0])
+			b, _ := strconv.Atoi(parts[1])
+			return a, b, true
+		}
+	}
+
+	branch := gitCurrentBranch(root)
+	if branch != "" && branch != "HEAD" {
+		if out, err := exec.Command("git", "-C", root, "rev-list", "--left-right", "--count", "HEAD...origin/"+branch).Output(); err == nil {
+			parts := strings.Fields(string(out))
+			if len(parts) >= 2 {
+				a, _ := strconv.Atoi(parts[0])
+				b, _ := strconv.Atoi(parts[1])
+				return a, b, true
+			}
+		}
+
+		if gitRemoteURL(root, "") != "" {
+			if out, err := exec.Command("git", "-C", root, "rev-list", "--count", "HEAD").Output(); err == nil {
+				c, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+				if c > 0 {
+					return c, 0, false
+				}
+			}
+		}
+	}
+
+	return 0, 0, false
+}
+
 // gitDiff returns the unified diff of relpath against HEAD. relpath is relative
 // to the served root; git resolves it against -C root. Fails quiet -> "".
 func gitDiff(root, relpath string) string {
@@ -461,3 +504,146 @@ func parseNewStart(hdr string) int {
 	}
 	return 1
 }
+
+// GitCommit represents a single commit in git log.
+type GitCommit struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
+	Author  string `json:"author"`
+	Date    string `json:"date"`
+}
+
+// gitRecentCommits returns up to count recent commits from HEAD.
+func gitRecentCommits(root string, count int) []GitCommit {
+	if count <= 0 {
+		count = 5
+	}
+	out, err := exec.Command("git", "-C", root, "log", fmt.Sprintf("-n%d", count), "--format=%h%x1f%s%x1f%an%x1f%cr").Output()
+	if err != nil {
+		return []GitCommit{}
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	commits := make([]GitCommit, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\x1f")
+		c := GitCommit{
+			Hash: parts[0],
+		}
+		if len(parts) > 1 {
+			c.Subject = parts[1]
+		}
+		if len(parts) > 2 {
+			c.Author = parts[2]
+		}
+		if len(parts) > 3 {
+			c.Date = parts[3]
+		}
+		commits = append(commits, c)
+	}
+	return commits
+}
+
+// gitHeadCommit returns the abbreviated or full HEAD commit hash.
+func gitHeadCommit(root string) string {
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitRemoteURL returns the fetch URL for the repo's upstream or origin remote.
+func gitRemoteURL(root, branch string) string {
+	if branch != "" {
+		if remote, _, ok := gitUpstream(root, branch); ok {
+			if out, err := exec.Command("git", "-C", root, "config", "--get", fmt.Sprintf("remote.%s.url", remote)).Output(); err == nil {
+				if u := strings.TrimSpace(string(out)); u != "" {
+					return u
+				}
+			}
+		}
+	}
+	out, err := exec.Command("git", "-C", root, "config", "--get", "remote.origin.url").Output()
+	if err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	return ""
+}
+
+// gitCommitsWebURL returns a web URL to view commits on GitHub/GitLab/Bitbucket if configured.
+func gitCommitsWebURL(root, branch string) string {
+	raw := gitRemoteURL(root, branch)
+	if raw == "" {
+		return ""
+	}
+	raw = strings.TrimSuffix(raw, ".git")
+
+	// git@host:owner/repo
+	if strings.HasPrefix(raw, "git@") {
+		parts := strings.SplitN(raw[4:], ":", 2)
+		if len(parts) == 2 {
+			host := parts[0]
+			path := strings.TrimPrefix(parts[1], "/")
+			if strings.Contains(host, "gitlab") {
+				if branch != "" && branch != "HEAD" {
+					return fmt.Sprintf("https://%s/%s/-/commits/%s", host, path, branch)
+				}
+				return fmt.Sprintf("https://%s/%s/-/commits", host, path)
+			}
+			if branch != "" && branch != "HEAD" {
+				return fmt.Sprintf("https://%s/%s/commits/%s", host, path, branch)
+			}
+			return fmt.Sprintf("https://%s/%s/commits", host, path)
+		}
+	}
+
+	// ssh://git@host/owner/repo
+	if strings.HasPrefix(raw, "ssh://") {
+		clean := strings.TrimPrefix(raw, "ssh://")
+		if idx := strings.Index(clean, "@"); idx >= 0 {
+			clean = clean[idx+1:]
+		}
+		parts := strings.SplitN(clean, "/", 2)
+		if len(parts) == 2 {
+			host := parts[0]
+			path := parts[1]
+			if strings.Contains(host, "gitlab") {
+				if branch != "" && branch != "HEAD" {
+					return fmt.Sprintf("https://%s/%s/-/commits/%s", host, path, branch)
+				}
+				return fmt.Sprintf("https://%s/%s/-/commits", host, path)
+			}
+			if branch != "" && branch != "HEAD" {
+				return fmt.Sprintf("https://%s/%s/commits/%s", host, path, branch)
+			}
+			return fmt.Sprintf("https://%s/%s/commits", host, path)
+		}
+	}
+
+	// https:// or http://
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		u, err := url.Parse(raw)
+		if err == nil {
+			u.User = nil // Strip user:token if any
+			path := strings.TrimPrefix(strings.TrimSuffix(u.Path, ".git"), "/")
+			if strings.Contains(u.Host, "gitlab") {
+				if branch != "" && branch != "HEAD" {
+					return fmt.Sprintf("https://%s/%s/-/commits/%s", u.Host, path, branch)
+				}
+				return fmt.Sprintf("https://%s/%s/-/commits", u.Host, path)
+			}
+			if branch != "" && branch != "HEAD" {
+				return fmt.Sprintf("https://%s/%s/commits/%s", u.Host, path, branch)
+			}
+			return fmt.Sprintf("https://%s/%s/commits", u.Host, path)
+		}
+	}
+
+	return ""
+}
+
+

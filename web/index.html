@@ -23,23 +23,47 @@
     <div id="git-panel" class="git-panel" hidden>
       <div id="git-panel-resizer" class="git-panel-resizer" title="Drag to resize"></div>
       <div class="git-panel-head">
+        <svg class="git-panel-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" title="Git Panel"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 3.5-6 3.5"/></svg>
         <span id="git-branch" class="git-branch"></span>
         <span id="git-counts" class="git-counts"></span>
         <span class="grow"></span>
         <button id="git-panel-collapse" class="pr-comments-collapse" title="Collapse">&#9662;</button>
       </div>
       <div id="git-panel-body" class="git-panel-body">
-        <div class="git-agent-picker">
-          <select id="git-harness" class="agent-harness-select" title="Coding harness"></select>
-          <select id="git-model" class="agent-model-select" title="Model"></select>
-          <button id="git-generate-msg" class="footer-btn git-generate-btn" title="Write a commit message from the staged diff using the selected coding harness">Commit with AI</button>
+        <div id="git-commit-section" class="git-commit-section">
+          <div class="git-agent-picker">
+            <select id="git-harness" class="agent-harness-select" title="Coding harness"></select>
+            <select id="git-model" class="agent-model-select" title="Model"></select>
+            <div class="git-ai-row">
+              <button id="git-generate-msg" class="footer-btn git-generate-btn" title="Stage all changes and write a commit message using the selected coding harness">Stage all + Commit with AI</button>
+              <button id="git-settings-nudge" class="footer-btn git-nudge-btn" type="button" title="Configure Git &amp; Diff settings (instructions, diffs, etc.)" aria-label="Git &amp; Diff settings"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
+            </div>
+          </div>
+          <textarea id="git-commit-msg" class="git-commit-msg" rows="3" spellcheck="false" autocomplete="off" placeholder="Commit message..."></textarea>
+          <div class="git-instructions-wrap">
+            <a id="git-instructions-link" class="git-instructions-link" href="#" role="button" title="Configure commit message instructions for AI in Settings">instructions for AI</a>
+          </div>
+          <div class="git-panel-actions git-commit-actions">
+            <button id="git-stage-all" class="footer-btn" title="Stage all changes">Stage All</button>
+            <button id="git-commit" class="footer-btn" title="Stage changes to commit" disabled>Commit</button>
+          </div>
         </div>
-        <textarea id="git-commit-msg" class="git-commit-msg" rows="2" spellcheck="false" autocomplete="off" placeholder="Commit message..."></textarea>
-        <div class="git-panel-actions">
-          <button id="git-stage-all" class="footer-btn" title="Stage all changes">Stage All</button>
-          <button id="git-commit" class="footer-btn" title="Commit staged changes">Commit</button>
+        <div id="git-clean-state" class="git-clean-state" hidden>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          <span>Working tree clean</span>
+        </div>
+        <div class="git-panel-actions git-sync-actions">
           <button id="git-pull" class="footer-btn" title="Pull (fast-forward only; refuses on conflict)">Pull</button>
-          <button id="git-push" class="footer-btn" title="Push">Push</button>
+          <button id="git-push" class="footer-btn" title="No unpushed commits to push" disabled>Push</button>
+        </div>
+        <div id="git-recent-commits" class="git-recent-commits">
+          <div class="git-recent-head">
+            <span class="git-recent-title">Recent Commits</span>
+          </div>
+          <div id="git-commits-list" class="git-commits-list"></div>
+          <div class="git-see-all-wrap">
+            <a id="git-see-all-commits" class="git-see-all-commits" href="#" target="_blank" rel="noopener">See all commits</a>
+          </div>
         </div>
       </div>
     </div>
@@ -454,6 +478,20 @@
       <div id="settings-raw-error" class="settings-error-banner" hidden></div>
       <textarea id="settings-raw-editor" spellcheck="false" autocomplete="off" wrap="off"></textarea>
     </div>
+
+    <!-- Settings Footer with Explicit Save Button -->
+    <footer id="settings-footer" class="settings-footer">
+      <div id="settings-footer-status" class="settings-footer-status is-saved">
+        <svg id="settings-status-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        <span id="settings-status-text">All changes saved</span>
+      </div>
+      <div class="settings-footer-actions">
+        <button type="button" id="btn-settings-save" class="settings-btn-save" title="Save settings ({Mod+S})">
+          <svg class="settings-btn-save-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          <span id="settings-btn-save-label">Save</span>
+        </button>
+      </div>
+    </footer>
   </div>
 </div>
 

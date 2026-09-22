@@ -13,13 +13,17 @@ import (
 )
 
 type GitStatusPayload struct {
-	Git        bool              `json:"git"`
-	GitChanges int               `json:"gitChanges"`
-	GitFiles   []string          `json:"gitFiles"`
-	Statuses   map[string]string `json:"statuses"`
-	DirtyDirs  map[string]bool   `json:"dirtyDirs,omitempty"`
-	Staged     map[string]bool   `json:"staged,omitempty"`
-	Branch     string            `json:"branch,omitempty"`
+	Git           bool              `json:"git"`
+	GitChanges    int               `json:"gitChanges"`
+	GitFiles      []string          `json:"gitFiles"`
+	Statuses      map[string]string `json:"statuses"`
+	DirtyDirs     map[string]bool   `json:"dirtyDirs,omitempty"`
+	Staged        map[string]bool   `json:"staged,omitempty"`
+	Branch        string            `json:"branch,omitempty"`
+	RecentCommits []GitCommit       `json:"recentCommits,omitempty"`
+	CommitsURL    string            `json:"commitsUrl,omitempty"`
+	Ahead         int               `json:"ahead"`
+	Behind        int               `json:"behind"`
 }
 
 type GitWatcher struct {
@@ -33,19 +37,23 @@ type GitWatcher struct {
 	triggerCh chan struct{}
 	stopCh    chan struct{}
 
-	lastIndexMod  time.Time
-	lastIndexSize int64
-	lastHeadMod   time.Time
-	lastPackedMod time.Time
+	lastIndexMod   time.Time
+	lastIndexSize  int64
+	lastHeadMod    time.Time
+	lastPackedMod  time.Time
+	lastHeadCommit string
+	lastAhead      int
+	lastBehind     int
 }
 
 func NewGitWatcher(ix *Index) *GitWatcher {
 	gw := &GitWatcher{
-		ix:        ix,
-		root:      ix.Root(),
-		clients:   make(map[chan []byte]struct{}),
-		triggerCh: make(chan struct{}, 1),
-		stopCh:    make(chan struct{}),
+		ix:             ix,
+		root:           ix.Root(),
+		clients:        make(map[chan []byte]struct{}),
+		triggerCh:      make(chan struct{}, 1),
+		stopCh:         make(chan struct{}),
+		lastHeadCommit: gitHeadCommit(ix.Root()),
 	}
 	return gw
 }
@@ -175,14 +183,38 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 // and returns the latest git status payload.
 func (gw *GitWatcher) Refresh() GitStatusPayload {
 	count, files, changed, statuses, dirtyDirs, staged := gw.ix.UpdateGitStatus()
+	var recentCommits []GitCommit
+	var ahead, behind int
+	if gitAvailable(gw.root) {
+		recentCommits = gitRecentCommits(gw.root, 5)
+		headCommit := ""
+		if len(recentCommits) > 0 {
+			headCommit = recentCommits[0].Hash
+		}
+		ahead, behind, _ = gitAheadBehind(gw.root)
+		gw.mu.Lock()
+		if headCommit != gw.lastHeadCommit || ahead != gw.lastAhead || behind != gw.lastBehind {
+			gw.lastHeadCommit = headCommit
+			gw.lastAhead = ahead
+			gw.lastBehind = behind
+			changed = true
+		}
+		gw.mu.Unlock()
+	}
+
+	branch := gitCurrentBranch(gw.root)
 	payload := GitStatusPayload{
-		Git:        gitAvailable(gw.root),
-		GitChanges: count,
-		GitFiles:   files,
-		Statuses:   statuses,
-		DirtyDirs:  dirtyDirs,
-		Staged:     staged,
-		Branch:     gitCurrentBranch(gw.root),
+		Git:           gitAvailable(gw.root),
+		GitChanges:    count,
+		GitFiles:      files,
+		Statuses:      statuses,
+		DirtyDirs:     dirtyDirs,
+		Staged:        staged,
+		Branch:        branch,
+		RecentCommits: recentCommits,
+		CommitsURL:    gitCommitsWebURL(gw.root, branch),
+		Ahead:         ahead,
+		Behind:        behind,
 	}
 	if changed {
 		data, err := json.Marshal(payload)
@@ -236,14 +268,20 @@ func (gw *GitWatcher) Subscribe() (<-chan []byte, func()) {
 				dirtyDirs[p] = true
 			}
 		}
+		branch := gitCurrentBranch(gw.root)
+		ahead, behind, _ := gitAheadBehind(gw.root)
 		payload := GitStatusPayload{
-			Git:        true,
-			GitChanges: count,
-			GitFiles:   files,
-			Statuses:   statuses,
-			DirtyDirs:  dirtyDirs,
-			Staged:     staged,
-			Branch:     gitCurrentBranch(gw.root),
+			Git:           true,
+			GitChanges:    count,
+			GitFiles:      files,
+			Statuses:      statuses,
+			DirtyDirs:     dirtyDirs,
+			Staged:        staged,
+			Branch:        branch,
+			RecentCommits: gitRecentCommits(gw.root, 5),
+			CommitsURL:    gitCommitsWebURL(gw.root, branch),
+			Ahead:         ahead,
+			Behind:        behind,
 		}
 		if data, err := json.Marshal(payload); err == nil {
 			initialMsg = []byte(fmt.Sprintf("event: git-status\ndata: %s\n\n", data))

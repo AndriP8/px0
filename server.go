@@ -82,6 +82,7 @@ func NewServer(ix *Index, lsp *lspManager) *Server {
 	s.mux.HandleFunc("/api/git/commit-message", s.handleGitCommitMessage)
 	s.mux.HandleFunc("/api/git/push", s.handleGitPush)
 	s.mux.HandleFunc("/api/git/pull", s.handleGitPull)
+	s.mux.HandleFunc("/api/git/log", s.handleGitLog)
 	s.mux.HandleFunc("/api/search", s.handleSearch)
 	s.mux.HandleFunc("/api/outline", s.handleOutline)
 	s.mux.HandleFunc("/api/def", s.handleDef)
@@ -979,6 +980,16 @@ func (s *Server) handleGitCommitMessage(w http.ResponseWriter, r *http.Request) 
 	}
 	diff := gitStagedDiff(s.ix.Root())
 	if strings.TrimSpace(diff) == "" {
+		// Auto-stage all uncommitted changes if nothing is staged
+		if gitHasUncommittedChanges(s.ix.Root()) {
+			_ = gitStage(s.ix.Root(), ".")
+			diff = gitStagedDiff(s.ix.Root())
+			if s.gitWatcher != nil {
+				s.gitWatcher.Trigger()
+			}
+		}
+	}
+	if strings.TrimSpace(diff) == "" {
 		fail(w, http.StatusBadRequest, "nothing staged to generate a message for")
 		return
 	}
@@ -1023,6 +1034,9 @@ func (s *Server) handleGitPush(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, http.StatusBadGateway, out)
 		return
+	}
+	if s.gitWatcher != nil {
+		s.gitWatcher.Trigger()
 	}
 	writeJSON(w, map[string]any{"ok": true})
 }
@@ -1084,6 +1098,27 @@ func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 		s.gitWatcher.Trigger()
 	}
 	writeJSON(w, map[string]any{"ok": true, "message": "pulled the latest changes"})
+}
+
+// handleGitLog returns recent commits from HEAD (default 5).
+func (s *Server) handleGitLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 5
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 50 {
+			limit = n
+		}
+	}
+	branch := gitCurrentBranch(s.ix.Root())
+	commits := gitRecentCommits(s.ix.Root(), limit)
+	commitsURL := gitCommitsWebURL(s.ix.Root(), branch)
+	writeJSON(w, map[string]any{
+		"commits":    commits,
+		"commitsUrl": commitsURL,
+	})
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

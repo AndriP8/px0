@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -788,3 +789,120 @@ func TestGitFFOnlyPull(t *testing.T) {
 		t.Fatalf("expected cloneB's f.txt untouched by the refused pull, got %q, err=%v", got, err)
 	}
 }
+
+func TestGitRecentCommitsAndLog(t *testing.T) {
+	dir := t.TempDir()
+	gitTestRun(t, dir, "init", "-b", "main")
+	for _, cfg := range [][2]string{{"user.email", "t@example.com"}, {"user.name", "T"}, {"commit.gpgsign", "false"}} {
+		gitTestRun(t, dir, "config", cfg[0], cfg[1])
+	}
+
+	// Initially no commits
+	commits := gitRecentCommits(dir, 5)
+	if len(commits) != 0 {
+		t.Fatalf("expected 0 commits in fresh repo, got %d", len(commits))
+	}
+
+	// Make 3 commits
+	for i := 1; i <= 3; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("file%d.txt", i))
+		if err := os.WriteFile(p, []byte("content"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitTestRun(t, dir, "add", p)
+		gitTestRun(t, dir, "commit", "-m", fmt.Sprintf("commit %d", i))
+	}
+
+	commits = gitRecentCommits(dir, 5)
+	if len(commits) != 3 {
+		t.Fatalf("expected 3 commits, got %d", len(commits))
+	}
+	if commits[0].Subject != "commit 3" {
+		t.Fatalf("expected latest commit to be 'commit 3', got %q", commits[0].Subject)
+	}
+
+	// Test /api/git/log endpoint
+	ix := NewIndex(dir)
+	ix.Build()
+	s := NewServer(ix, nil)
+	ts := httptest.NewServer(s.mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/git/log?limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var payload struct {
+		Commits    []GitCommit `json:"commits"`
+		CommitsURL string      `json:"commitsUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Commits) != 2 {
+		t.Fatalf("expected 2 commits from /api/git/log?limit=2, got %d", len(payload.Commits))
+	}
+	if payload.Commits[0].Subject != "commit 3" {
+		t.Fatalf("expected 'commit 3', got %q", payload.Commits[0].Subject)
+	}
+
+	// Test gitCommitsWebURL with github origin
+	gitTestRun(t, dir, "remote", "add", "origin", "git@github.com:alice/my-repo.git")
+	commitsWebURL := gitCommitsWebURL(dir, "master")
+	if !strings.Contains(commitsWebURL, "github.com/alice/my-repo/commits") {
+		t.Fatalf("expected github commits URL, got %q", commitsWebURL)
+	}
+}
+
+func TestGitAheadBehind(t *testing.T) {
+	// Create bare remote repository
+	remoteDir := t.TempDir()
+	gitTestRun(t, remoteDir, "init", "--bare")
+
+	// Create local repository
+	localDir := t.TempDir()
+	gitTestRun(t, localDir, "init")
+	gitTestRun(t, localDir, "config", "user.email", "alice@example.com")
+	gitTestRun(t, localDir, "config", "user.name", "Alice")
+	gitTestRun(t, localDir, "checkout", "-b", "main")
+
+	// Commit 1
+	os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("hello"), 0o644)
+	gitTestRun(t, localDir, "add", "a.txt")
+	gitTestRun(t, localDir, "commit", "-m", "init")
+
+	// Add remote and push with upstream
+	gitTestRun(t, localDir, "remote", "add", "origin", remoteDir)
+	gitTestRun(t, localDir, "push", "-u", "origin", "main")
+
+	// Initially in sync: ahead=0, behind=0
+	ahead, behind, hasUpstream := gitAheadBehind(localDir)
+	if !hasUpstream {
+		t.Fatalf("expected hasUpstream=true")
+	}
+	if ahead != 0 || behind != 0 {
+		t.Fatalf("expected ahead=0 behind=0, got ahead=%d behind=%d", ahead, behind)
+	}
+
+	// Make a new commit locally
+	os.WriteFile(filepath.Join(localDir, "a.txt"), []byte("hello 2"), 0o644)
+	gitTestRun(t, localDir, "add", "a.txt")
+	gitTestRun(t, localDir, "commit", "-m", "update 1")
+
+	// Now ahead=1, behind=0
+	ahead, behind, _ = gitAheadBehind(localDir)
+	if ahead != 1 || behind != 0 {
+		t.Fatalf("expected ahead=1 behind=0, got ahead=%d behind=%d", ahead, behind)
+	}
+
+	// Push changes
+	gitTestRun(t, localDir, "push")
+
+	// Back in sync: ahead=0
+	ahead, behind, _ = gitAheadBehind(localDir)
+	if ahead != 0 || behind != 0 {
+		t.Fatalf("expected ahead=0 behind=0 after push, got ahead=%d behind=%d", ahead, behind)
+	}
+}
+

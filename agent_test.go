@@ -72,6 +72,11 @@ func agentServer(t *testing.T, root, harness string) *Server {
 	ix.Build()
 	s := NewServer(ix, nil)
 	s.SetAgent(m)
+	t.Cleanup(func() {
+		if s.gitWatcher != nil {
+			s.gitWatcher.Stop()
+		}
+	})
 	return s
 }
 

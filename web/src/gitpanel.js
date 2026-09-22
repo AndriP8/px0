@@ -3,10 +3,11 @@
 // a git repo (same gate as the diff-view toggle in status.js). In a PR
 // review session (S.meta.pr set), Push/Pull target the PR's actual head
 // branch instead of the checkout's own remote -- see pr.go's Push/Pull.
-import { $, S, api, apiPostJson } from './state.js';
+import { $, esc, S, api, apiPostJson } from './state.js';
 import { showToast } from './ui.js';
 import { reindexWorkspace } from './panels.js';
 import { refreshPRMeta } from './pr.js';
+import { openSettings } from './settings.js';
 import { layout, render } from './renderer.js';
 
 const panel = () => $('#git-panel');
@@ -48,8 +49,17 @@ export function initGitPanel() {
   $('#git-push')?.addEventListener('click', doPush);
   $('#git-pull')?.addEventListener('click', doPull);
   $('#git-generate-msg')?.addEventListener('click', doCommitWithAI);
+  $('#git-settings-nudge')?.addEventListener('click', () => openSettings('ui', 'Git & Diff'));
+  $('#git-instructions-link')?.addEventListener('click', e => {
+    e.preventDefault();
+    openSettings('ui', 'Git & Diff', 'git.commitMessageInstruction');
+  });
+  $('#git-see-all-commits')?.addEventListener('click', handleSeeAllCommits);
 
   updateGitPanelVisibility();
+  if (S.meta?.git) {
+    fetchRecentCommits();
+  }
 }
 
 function updateGitPanelVisibility() {
@@ -69,12 +79,65 @@ export function updateGitPanel(payload) {
     branchEl.textContent = branch;
     branchEl.title = branch;
   }
+  const staged = payload?.staged ? Object.keys(payload.staged).length : 0;
+  const changed = payload?.gitChanges || 0;
   const countsEl = $('#git-counts');
   if (countsEl) {
-    const staged = payload?.staged ? Object.keys(payload.staged).length : 0;
-    const changed = payload?.gitChanges || 0;
     countsEl.textContent = changed ? staged + ' / ' + changed + ' staged' : '';
   }
+
+  // Lifecycle state management:
+  // Show commit section when there are uncommitted changes or staged files.
+  // When clean, hide commit section and show clean state message.
+  const hasChanges = changed > 0 || staged > 0;
+  const commitSection = $('#git-commit-section');
+  if (commitSection) {
+    commitSection.hidden = !hasChanges;
+  }
+  const cleanState = $('#git-clean-state');
+  if (cleanState) {
+    cleanState.hidden = hasChanges;
+  }
+
+  // Commit button is only enabled when something is staged
+  const commitBtn = $('#git-commit');
+  if (commitBtn) {
+    commitBtn.disabled = staged === 0;
+    commitBtn.title = staged === 0 ? 'Stage changes to commit' : 'Commit staged changes';
+  }
+
+  // Push button is enabled only when there are unpushed commits (ahead > 0)
+  const pushBtn = $('#git-push');
+  if (pushBtn) {
+    const ahead = payload?.ahead ?? 0;
+    pushBtn.disabled = ahead === 0;
+    if (ahead > 0) {
+      pushBtn.textContent = `Push (${ahead}↑)`;
+      pushBtn.title = `Push ${ahead} unpushed commit${ahead > 1 ? 's' : ''} to remote`;
+    } else {
+      pushBtn.textContent = 'Push';
+      pushBtn.title = 'No unpushed commits to push';
+    }
+  }
+
+  // Pull button: show incoming badge if behind > 0
+  const pullBtn = $('#git-pull');
+  if (pullBtn) {
+    const behind = payload?.behind ?? 0;
+    if (behind > 0) {
+      pullBtn.textContent = `Pull (${behind}↓)`;
+      pullBtn.title = `Pull ${behind} incoming commit${behind > 1 ? 's' : ''} from remote`;
+    } else {
+      pullBtn.textContent = 'Pull';
+      pullBtn.title = 'Pull changes from remote';
+    }
+  }
+
+  // Render recent commits if provided in payload
+  if (payload?.recentCommits) {
+    renderRecentCommits(payload.recentCommits);
+  }
+  updateSeeAllCommits(payload?.commitsUrl, payload?.recentCommits ? payload.recentCommits.length : undefined);
 }
 
 export async function stagePath(path) {
@@ -106,6 +169,7 @@ async function doCommit() {
     await apiPostJson('/api/git/commit', { message });
     if (ta) ta.value = '';
     showToast('✓', 'Committed');
+    await fetchRecentCommits();
   } catch (e) {
     showToast('!', e.message || 'Commit failed');
   } finally {
@@ -119,9 +183,13 @@ async function doPush() {
   try {
     await apiPostJson('/api/git/push', {});
     showToast('✓', 'Pushed');
+    if (btn) {
+      btn.textContent = 'Push';
+      btn.title = 'No unpushed commits to push';
+      btn.disabled = true;
+    }
   } catch (e) {
     showToast('!', e.message || 'Push failed');
-  } finally {
     if (btn) btn.disabled = false;
   }
 }
@@ -134,6 +202,7 @@ async function doPull() {
     showToast('✓', j.message || 'Pulled');
     await reindexWorkspace();
     if (S.meta?.pr) await refreshPRMeta();
+    await fetchRecentCommits();
   } catch (e) {
     showToast('!', e.message || 'Pull failed');
   } finally {
@@ -141,14 +210,28 @@ async function doPull() {
   }
 }
 
-// Dispatches the selected coding harness to write a commit message for the
-// staged diff (honoring the git.commitMessageInstruction setting, see
-// settings.go), then polls the same /api/agent/job endpoint an inline edit
-// does until it finishes, and commits with whatever it wrote.
+// Dispatches Stage + Commit with AI:
+// 1. Stages all changes
+// 2. Dispatches the selected coding harness to write a commit message
+//    (honoring git.commitMessageInstruction setting)
+// 3. Automatically commits with the generated message
 async function doCommitWithAI() {
   const btn = $('#git-generate-msg');
   if (btn) {
     btn.disabled = true;
+    btn.textContent = 'Staging...';
+  }
+
+  // Stage all changes
+  try {
+    await apiPostJson('/api/git/stage', { path: '.' });
+  } catch (e) {
+    resetGenerateBtn(btn);
+    showToast('!', e.message || 'Could not stage changes');
+    return;
+  }
+
+  if (btn) {
     btn.textContent = 'Writing message...';
   }
   let job;
@@ -165,7 +248,7 @@ async function doCommitWithAI() {
 function resetGenerateBtn(btn) {
   if (!btn) return;
   btn.disabled = false;
-  btn.textContent = 'Commit with AI';
+  btn.textContent = 'Stage all + Commit with AI';
 }
 
 function pollCommitMessage(id, btn) {
@@ -209,6 +292,7 @@ async function commitWithMessage(message, btn) {
     const ta = $('#git-commit-msg');
     if (ta) ta.value = '';
     showToast('✓', 'Committed with AI');
+    await fetchRecentCommits();
   } catch (e) {
     showToast('!', e.message || 'Commit failed');
   } finally {
@@ -223,4 +307,87 @@ function cleanCommitMessage(text) {
   const fence = t.match(/^```[a-z]*\n([\s\S]*?)\n```$/);
   if (fence) t = fence[1].trim();
   return t;
+}
+
+export async function fetchRecentCommits() {
+  if (!S.meta?.git) return;
+  try {
+    const res = await api('/api/git/log?limit=5');
+    if (res?.commits) {
+      renderRecentCommits(res.commits);
+      updateSeeAllCommits(res.commitsUrl, res.commits.length);
+    }
+  } catch {
+    // Silently ignore if git log not available
+  }
+}
+
+let currentCommitsUrl = '';
+
+function updateSeeAllCommits(commitsUrl, commitCount) {
+  if (commitsUrl) currentCommitsUrl = commitsUrl;
+  if (S.meta?.pr) {
+    currentCommitsUrl = `https://github.com/${S.meta.pr.owner}/${S.meta.pr.repo}/pull/${S.meta.pr.number}/commits`;
+  }
+  const link = $('#git-see-all-commits');
+  if (!link) return;
+  if (commitCount === 0) {
+    link.hidden = true;
+    return;
+  }
+  link.hidden = false;
+  if (currentCommitsUrl) {
+    link.href = currentCommitsUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.title = 'View all repository commits in browser';
+  } else {
+    link.href = '#';
+    link.removeAttribute('target');
+    link.title = 'View commits';
+  }
+}
+
+async function handleSeeAllCommits(e) {
+  if (currentCommitsUrl) return; // Follow standard hyperlink
+  e.preventDefault();
+  try {
+    const res = await api('/api/git/log?limit=50');
+    if (res?.commits) {
+      renderRecentCommits(res.commits);
+      const link = $('#git-see-all-commits');
+      if (link) link.hidden = true;
+    }
+  } catch (err) {
+    showToast('!', err.message || 'Could not load commits');
+  }
+}
+
+function renderRecentCommits(commits) {
+  const list = $('#git-commits-list');
+  if (!list) return;
+  if (!commits || commits.length === 0) {
+    list.innerHTML = '<div class="git-commits-empty">No commits yet</div>';
+    return;
+  }
+  list.innerHTML = commits.slice(0, 5).map(c => `
+    <div class="git-commit-row" data-hash="${esc(c.hash)}" title="${esc(c.hash)}: ${esc(c.subject || '')} (${esc(c.author || '')}, ${esc(c.date || '')}) - Click to copy SHA">
+      <svg class="git-commit-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="8" r="2.8"/><line x1="8" y1="1" x2="8" y2="5.2"/><line x1="8" y1="10.8" x2="8" y2="15"/></svg>
+      <span class="git-commit-msg-text">${esc(c.subject || '(no message)')}</span>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.git-commit-row').forEach(row => {
+    row.addEventListener('click', async () => {
+      const h = row.dataset.hash;
+      if (h) {
+        try {
+          await navigator.clipboard.writeText(h);
+          showToast('✓', 'Copied ' + h);
+        } catch {
+          showToast('!', h);
+        }
+      }
+    });
+  });
 }
