@@ -25,9 +25,14 @@ function handleLineBtnClick(btn) {
 
   // In a PR review session, a diff line is for leaving a review comment --
   // the button's own tooltip promises that, and it's what a reviewer wants
-  // most. AI edit stays reachable via selection + Alt+E either way.
+  // most. AI edit stays reachable via selection + Alt+E either way. Rows
+  // marked non-reviewable (diff.js's "Your changes" section, i.e. edits the
+  // reviewer made locally since checkout) fall through to a plain inline
+  // edit instead: those lines aren't part of any commit GitHub knows about,
+  // so there's nothing a submitted review could attach a comment to.
   if (diffRow) {
-    const reviewHandler = S.meta?.pr && getReviewHandler();
+    const reviewable = diffRow.dataset.reviewable !== '0';
+    const reviewHandler = S.meta?.pr && reviewable && getReviewHandler();
     if (reviewHandler) { reviewHandler(diffLineInfo(diffRow, d.path)); return; }
   }
 

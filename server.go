@@ -58,14 +58,18 @@ func cleanBasePath(p string) string {
 }
 
 type Server struct {
-	ix         *Index
-	lsp        *lspManager
-	agent      *agentManager // nil unless main wires editing for this session
-	pr         *prSession    // nil unless main launched this process as `px0 pr ...`
-	diffBase   string        // ref /api/diff and /api/gutter diff against; "HEAD" unless in PR mode
+	ix        *Index
+	lsp       *lspManager
+	agent     *agentManager // nil unless main wires editing for this session
+	pr        *prSession    // nil unless main launched this process as `px0 pr ...`
+	diffBase  string        // ref /api/diff and /api/gutter diff against; "HEAD" unless in PR mode
+	prHeadSHA string        // PR mode only: the checked-out PR head commit. Frozen boundary between
+	// the PR's own diff (diffBase..prHeadSHA) and the reviewer's local edits
+	// since checkout (prHeadSHA..working tree); refreshed on Pull.
 	gitWatcher *GitWatcher
 	mux        *http.ServeMux
 	basePath   string
+	session    *sessionManager
 
 	lastReq atomic.Int64 // unix nanos of the most recent request
 }
@@ -79,6 +83,7 @@ func (s *Server) BasePath() string {
 
 func (s *Server) SetBasePath(bp string) {
 	s.basePath = cleanBasePath(bp)
+	s.session = newSessionManager(s.basePath, s.ix.Root())
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 }
@@ -165,6 +170,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/pr/existing-comments"), s.handlePRExistingComments)
 	s.mux.HandleFunc(s.routePath("/api/pr/comments/issue"), s.handlePRIssueCommentPost)
 	s.mux.HandleFunc(s.routePath("/api/pr/comments/review-reply"), s.handlePRReviewCommentReply)
+	s.mux.HandleFunc(s.routePath("/api/session"), s.handleSession)
 }
 
 func NewServer(ix *Index, lsp *lspManager, basePaths ...string) *Server {
@@ -176,6 +182,7 @@ func NewServer(ix *Index, lsp *lspManager, basePaths ...string) *Server {
 		bp = cleanBasePath(basePaths[0])
 	}
 	s := &Server{ix: ix, lsp: lsp, diffBase: "HEAD", basePath: bp, mux: http.NewServeMux()}
+	s.session = newSessionManager(s.basePath, ix.Root())
 	s.gitWatcher = NewGitWatcher(ix)
 	s.gitWatcher.Start(context.Background())
 	s.registerRoutes()
@@ -390,11 +397,24 @@ func (s *Server) SetPR(p *prSession) {
 	s.pr = p
 	if p != nil {
 		s.diffBase = p.diffBase
+		s.prHeadSHA = p.meta.HeadSHA
 		if s.ix != nil {
 			s.ix.SetDiffBase(p.diffBase)
 		}
 		if s.gitWatcher != nil {
 			s.gitWatcher.Trigger()
+		}
+		if s.session != nil {
+			p.mu.Lock()
+			if len(p.comments) == 0 && len(s.session.Get().Drafts) > 0 {
+				p.comments = append([]prComment(nil), s.session.Get().Drafts...)
+				for _, c := range p.comments {
+					if c.ID > p.nextID {
+						p.nextID = c.ID
+					}
+				}
+			}
+			p.mu.Unlock()
 		}
 	}
 }
@@ -495,6 +515,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 			"readOnly":        p.token == "",
 			"draftCount":      len(p.comments),
 			"diffBaseWarning": p.diffBaseWarning,
+			"headSHA":         p.meta.HeadSHA,
 			"url":             p.target.URL,
 		}
 		p.mu.Unlock()
@@ -834,6 +855,14 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 
 // handleDiff returns the unified diff of a file against HEAD. available is false
 // (with an empty diff and 200) when git is off/absent or the file is unchanged.
+//
+// In a PR review session, "diff" stays the full merge-base..working-tree diff
+// for backward compatibility, but the response also splits it into prDiff
+// (diffBase..prHeadSHA -- the PR's own, frozen change) and yourDiff
+// (prHeadSHA..working-tree -- what the reviewer has edited/committed locally
+// since checkout). Committing in that session only ever changes yourDiff, so
+// the frontend can label the two apart instead of showing one blended diff
+// that looks the same whether or not the reviewer has touched anything.
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	_, rel, ok := s.resolvePath(r.URL.Query().Get("path"))
 	if !ok {
@@ -849,7 +878,12 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		}
 		uiStatus("info", "diff", fmt.Sprintf("%s · %s", rel, status), 0, os.Stdout)
 	}
-	writeJSON(w, map[string]any{"path": rel, "diff": diff, "available": diff != ""})
+	resp := map[string]any{"path": rel, "diff": diff, "available": diff != ""}
+	if s.pr != nil {
+		resp["prDiff"] = gitDiffBetween(s.ix.Root(), rel, s.diffBase, s.prHeadSHA)
+		resp["yourDiff"] = gitDiffAgainst(s.ix.Root(), rel, s.prHeadSHA)
+	}
+	writeJSON(w, resp)
 }
 
 // handleGutter returns per-file changed-line ranges (new-file line numbers) for
@@ -1145,6 +1179,7 @@ func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 		}
 		s.pr.mu.Lock()
 		s.diffBase = s.pr.diffBase
+		s.prHeadSHA = s.pr.meta.HeadSHA
 		s.pr.mu.Unlock()
 		if s.ix != nil {
 			s.ix.SetDiffBase(s.diffBase)

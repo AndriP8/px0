@@ -419,6 +419,22 @@ func gitDiffAgainst(root, relpath, base string) string {
 	return string(out)
 }
 
+// gitDiffBetween is gitDiffAgainst generalized to a two-dot diff between two
+// commits, rather than a commit against the working tree. A PR review
+// session uses it to render the PR's own diff (merge-base..head) separately
+// from the reviewer's local changes since checkout (head..working tree),
+// which gitDiffAgainst covers.
+func gitDiffBetween(root, relpath, from, to string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--no-color", from, to, "--", relpath).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // gitMergeBase returns the merge-base commit of a and b, or "" if it cannot
 // be determined (e.g. b was never fetched locally).
 func gitMergeBase(root, a, b string) string {
@@ -645,5 +661,3 @@ func gitCommitsWebURL(root, branch string) string {
 
 	return ""
 }
-
-

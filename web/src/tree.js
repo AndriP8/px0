@@ -1,11 +1,21 @@
 // web/src/tree.js
-import { $, $$, esc, api, apiPostJson, S } from './state.js';
+import { $, $$, esc, api, apiPost, apiPostJson, S } from './state.js';
 import { openFile } from './tabs.js';
 import { setStatusNote } from './status.js';
 import { showToast } from './ui.js';
 
 export const treeEl = $('#tree');
 export const openDirs = new Set();
+
+let saveDirsTimer = null;
+function persistOpenDirs() {
+  if (saveDirsTimer) clearTimeout(saveDirsTimer);
+  saveDirsTimer = setTimeout(async () => {
+    try {
+      await apiPost('/api/session', { openDirs: Array.from(openDirs) });
+    } catch {}
+  }, 300);
+}
 
 /* git status letter -> CSS class + label. Empty/absent = clean, no badge. */
 const GIT_STATUS = {
@@ -105,9 +115,7 @@ export async function revealDir(dir) {
   }
   const last = treeEl.querySelector('[data-dir="' + CSS.escape(dir) + '"]');
   if (last) last.scrollIntoView({ block: 'center' });
-  try {
-    sessionStorage.setItem('px0.openDirs', JSON.stringify(Array.from(openDirs)));
-  } catch {}
+  persistOpenDirs();
 }
 
 export async function revealFile(path) {
@@ -135,9 +143,7 @@ export async function expandDirtyDirs(container = treeEl) {
       await expandDirtyDirs(kids);
     }
   }
-  try {
-    sessionStorage.setItem('px0.openDirs', JSON.stringify(Array.from(openDirs)));
-  } catch {}
+  persistOpenDirs();
 }
 
 export async function patchTreeGitStatus(statuses = {}, dirtyDirs = {}, staged = {}) {
@@ -275,9 +281,7 @@ export function initTree() {
         kids.dataset.loaded = '1';
         await drawTree(path, kids, path.split('/').length);
       } else openDirs.delete(path);
-      try {
-        sessionStorage.setItem('px0.openDirs', JSON.stringify(Array.from(openDirs)));
-      } catch {}
+      persistOpenDirs();
       return;
     }
     const f = e.target.closest('[data-file]');

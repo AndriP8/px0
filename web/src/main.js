@@ -90,8 +90,10 @@ initLineComment();
     if (emptyVerEl) emptyVerEl.textContent = 'v' + S.meta.version;
   }
   try {
-    const savedDirs = JSON.parse(sessionStorage.getItem('px0.openDirs') || '[]');
-    restoreOpenDirs(savedDirs);
+    const session = await api('/api/session');
+    if (session && Array.isArray(session.openDirs) && session.openDirs.length > 0) {
+      restoreOpenDirs(session.openDirs);
+    }
   } catch {}
   await refreshTree();
   initGitStream();

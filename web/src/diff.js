@@ -88,9 +88,17 @@ async function drawDiff(d, force = false) {
       const j = await d.diffReq;
       d.diffText = j.diff || '';
       d.diffHunks = parseDiff(d.diffText);
+      // In a PR review session the server also splits the diff at the PR's
+      // checked-out head commit: prDiff is the PR's own change (frozen since
+      // checkout/last Pull), yourDiff is whatever the reviewer has edited or
+      // committed locally since then. Undefined outside PR mode.
+      d.prDiffHunks = j.prDiff !== undefined ? parseDiff(j.prDiff) : undefined;
+      d.yourDiffHunks = j.yourDiff !== undefined ? parseDiff(j.yourDiff) : undefined;
     } catch (e) {
       d.diffText = '';
       d.diffHunks = [];
+      d.prDiffHunks = undefined;
+      d.yourDiffHunks = undefined;
       setStatusNote('No diff: ' + e.message, 4000);
     } finally {
       d.diffReq = null;
@@ -104,23 +112,68 @@ async function drawDiff(d, force = false) {
   }
 }
 
+function appendHunks(frag, hunks, mode, reviewable) {
+  for (const hunk of hunks) {
+    frag.append(hunkHeader(hunk));
+    frag.append(mode === 'unified' ? unifiedTable(hunk, reviewable) : splitTable(hunk, reviewable));
+  }
+}
+
 function renderDiff(d) {
   diffContent.replaceChildren();
-  if (!d.diffHunks || !d.diffHunks.length) {
-    const p = document.createElement('div');
-    p.className = 'diff-empty';
-    p.textContent = 'No changes against HEAD.';
-    diffContent.append(p);
-    return;
-  }
   const frag = document.createDocumentFragment();
-  for (const hunk of d.diffHunks) {
-    frag.append(hunkHeader(hunk));
-    frag.append(d.diffMode === 'unified' ? unifiedTable(hunk) : splitTable(hunk));
+  if (S.meta?.pr && d.prDiffHunks !== undefined) {
+    if (!d.prDiffHunks.length && !d.yourDiffHunks.length) {
+      const p = document.createElement('div');
+      p.className = 'diff-empty';
+      p.textContent = 'No changes.';
+      diffContent.append(p);
+      return;
+    }
+    frag.append(sectionHeader('pr', 'PR changes', 'from ' + (S.meta.pr.base || 'base')));
+    if (!d.prDiffHunks.length) frag.append(sectionNote('The PR itself makes no change to this file.'));
+    else appendHunks(frag, d.prDiffHunks, d.diffMode, true);
+
+    const since = S.meta.pr.headSHA ? 'since ' + S.meta.pr.headSHA.slice(0, 7) : 'since checkout';
+    frag.append(sectionHeader('you', 'Your changes', since));
+    if (!d.yourDiffHunks.length) frag.append(sectionNote('Nothing edited or committed yet — changes you make will show up here.'));
+    else appendHunks(frag, d.yourDiffHunks, d.diffMode, false);
+  } else {
+    if (!d.diffHunks || !d.diffHunks.length) {
+      const p = document.createElement('div');
+      p.className = 'diff-empty';
+      p.textContent = 'No changes against HEAD.';
+      diffContent.append(p);
+      return;
+    }
+    appendHunks(frag, d.diffHunks, d.diffMode, true);
   }
   diffContent.append(frag);
   syncDiffAgentTargets();
   if (prSyncHandler) prSyncHandler();
+}
+
+function sectionHeader(kind, title, sub) {
+  const el = document.createElement('div');
+  el.className = 'diff-section-head diff-section-head-' + kind;
+  const t = document.createElement('span');
+  t.className = 'diff-section-title';
+  t.textContent = title;
+  el.append(t);
+  if (sub) {
+    const s = document.createElement('span');
+    s.className = 'diff-section-sub';
+    s.textContent = sub;
+    el.append(s);
+  }
+  return el;
+}
+
+function sectionNote(text) {
+  const el = document.createElement('div');
+  el.className = 'diff-section-note';
+  el.textContent = text;
+  return el;
 }
 
 /* One-way registration for pr.js, mirroring agent.js's hook into selbar.js:
@@ -204,16 +257,16 @@ function parseDiff(text) {
 
 /* ---------- unified layout: one row per diff line ---------- */
 
-function unifiedTable(hunk) {
+function unifiedTable(hunk, reviewable = true) {
   const table = document.createElement('div');
   table.className = 'diff-table diff-unified';
   for (const row of hunk.rows) {
     const r = document.createElement('div');
     r.className = 'diff-row diff-' + row.type;
-    anchor(r, row);
+    anchor(r, row, reviewable);
     r.append(
-      lineCell(row.type === 'add' ? '' : row.oldLine),
-      lineCell(row.type === 'del' ? '' : row.newLine),
+      lineCell(row.type === 'add' ? '' : row.oldLine, reviewable),
+      lineCell(row.type === 'del' ? '' : row.newLine, reviewable),
       markerCell(row.type),
       codeCell(row.text),
     );
@@ -224,13 +277,13 @@ function unifiedTable(hunk) {
 
 /* ---------- split layout: deletions and additions paired side by side ---------- */
 
-function splitTable(hunk) {
+function splitTable(hunk, reviewable = true) {
   const table = document.createElement('div');
   table.className = 'diff-table diff-split';
   for (const pair of pairRows(hunk.rows)) {
     const r = document.createElement('div');
     r.className = 'diff-row-pair';
-    r.append(splitSide(pair.left, 'left'), splitSide(pair.right, 'right'));
+    r.append(splitSide(pair.left, 'left', reviewable), splitSide(pair.right, 'right', reviewable));
     table.append(r);
   }
   return table;
@@ -254,27 +307,34 @@ function pairRows(rows) {
   return pairs;
 }
 
-function splitSide(row, side) {
+function splitSide(row, side, reviewable = true) {
   const el = document.createElement('div');
   el.className = 'diff-side diff-side-' + side + (row ? ' diff-' + row.type : ' diff-blank');
-  if (!row) { el.append(lineCell(''), markerCell(''), codeCell('')); return el; }
+  if (!row) { el.append(lineCell('', reviewable), markerCell(''), codeCell('')); return el; }
   const ln = side === 'left' ? row.oldLine : row.newLine;
-  anchor(el, row);
-  el.append(lineCell(ln), markerCell(row.type), codeCell(row.text));
+  anchor(el, row, reviewable);
+  el.append(lineCell(ln, reviewable), markerCell(row.type), codeCell(row.text));
   return el;
 }
 
 /* Stamps where a row points in the working tree, so a selection on it can be
    edited. Context and added lines have a line on disk (data-l), which a context
    line shares across both sides of the split. A deleted line has none, only the
-   place it used to be (data-at). */
-function anchor(el, row) {
+   place it used to be (data-at).
+   reviewable marks whether this row's line number is meaningful as a GitHub
+   review-comment target -- true for the PR's own diff (numbered against the
+   checked-out head commit, which is what a submitted review is posted
+   against), false for the reviewer's local "Your changes" section, whose
+   lines don't correspond to anything pushed yet. linecomment.js reads this
+   to fall back to a plain inline AI edit instead of opening the composer. */
+function anchor(el, row, reviewable = true) {
   if (row.newLine !== undefined) el.dataset.l = row.newLine;
   else if (row.at !== undefined) el.dataset.at = row.at;
   if (row.oldLine !== undefined) el.dataset.oldL = row.oldLine;
+  if (!reviewable) el.dataset.reviewable = '0';
 }
 
-function lineCell(n) {
+function lineCell(n, reviewable = true) {
   const el = document.createElement('div');
   el.className = 'diff-ln';
   if (n !== '' && n !== undefined) {
@@ -283,7 +343,7 @@ function lineCell(n) {
     const btn = document.createElement('span');
     btn.className = 'line-btn';
     btn.setAttribute('role', 'button');
-    btn.title = S.meta?.pr ? 'Add review comment' : 'Edit inline';
+    btn.title = (S.meta?.pr && reviewable) ? 'Add review comment' : 'Edit inline';
     btn.textContent = '✎';
     el.append(btn);
   }

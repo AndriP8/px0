@@ -785,6 +785,20 @@ body.word-wrap .c { white-space: pre-wrap; word-break: break-word; overflow-wrap
   font-size: 12px; white-space: pre;
 }
 .diff-hunk-head:first-child { border-top: none; }
+/* Splits a PR review's diff into the PR's own (frozen) change and whatever
+   the reviewer has edited/committed locally since checkout -- see diff.js's
+   drawDiff/renderDiff. Distinct from .diff-hunk-head so the two never read
+   as "just another hunk". */
+.diff-section-head {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; gap: 8px;
+  padding: 6px 12px; background: var(--bg2); border-bottom: 1px solid var(--line);
+  font: 600 11px/1.4 var(--ui); text-transform: uppercase; letter-spacing: .04em;
+}
+.diff-section-head:first-child { border-top: none; }
+.diff-section-title { color: var(--fg); }
+.diff-section-head-you .diff-section-title { color: var(--accent-fg); }
+.diff-section-sub { font: 11px/1.4 var(--ui); color: var(--faint); text-transform: none; letter-spacing: normal; }
+.diff-section-note { padding: 10px 12px; color: var(--faint); font: 12px/1.4 var(--ui); font-style: italic; }
 .diff-ln {
   position: relative;
   flex: none; width: 48px; padding: 0 10px 0 6px; text-align: right;

@@ -643,6 +643,104 @@ func TestGitStatusAgainstAndPRDiff(t *testing.T) {
 	}
 }
 
+// TestHandleDiffPRSplitsPRAndYourChanges is the regression test for the
+// git-panel commit UX bug: in a PR review session, /api/diff used to return
+// one diff (mergeBase..working-tree) that looked identical before and after
+// the reviewer committed, since committing doesn't touch file contents.
+// handleDiff now also splits the same range into prDiff (mergeBase..PR head,
+// frozen) and yourDiff (PR head..working tree, what a local commit actually
+// changes), so the two never conflate the author's diff with the reviewer's.
+func TestHandleDiffPRSplitsPRAndYourChanges(t *testing.T) {
+	if !gitInstalled() {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	run := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(rel, body string) {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("foo.go", "package main\n\nfunc Foo() int { return 1 }\n")
+	run("init")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "T")
+	run("config", "commit.gpgsign", "false")
+	run("add", "-A")
+	run("commit", "-m", "initial commit")
+	mergeBase := run("rev-parse", "HEAD")
+
+	// The PR's own change, baked into history like a real checked-out PR head.
+	write("foo.go", "package main\n\nfunc Foo() int { return 2 }\n")
+	run("commit", "-am", "pr commit")
+	prHead := run("rev-parse", "HEAD")
+
+	ix := NewIndex(root)
+	ix.Build()
+	srv := NewServer(ix, newLSPManager(root, false))
+	srv.SetPR(&prSession{
+		target: PRTarget{Owner: "o", Repo: "r"},
+		meta:   PRMeta{Number: 1, BaseRef: "main", HeadRef: "feature", HeadSHA: prHead},
+		// checkoutPR would have set this to the real merge-base; a plain
+		// commit SHA works identically as a diff boundary in this test.
+		diffBase: mergeBase,
+	})
+
+	getDiff := func() map[string]any {
+		req := httptest.NewRequest("GET", "/api/diff?path=foo.go", nil)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("expected 200 from /api/diff, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal error: %v", err)
+		}
+		return resp
+	}
+
+	// Before any local edit: prDiff carries the PR's own change, yourDiff is empty.
+	resp := getDiff()
+	prDiff, _ := resp["prDiff"].(string)
+	yourDiff, _ := resp["yourDiff"].(string)
+	if !strings.Contains(prDiff, "-func Foo() int { return 1 }") || !strings.Contains(prDiff, "+func Foo() int { return 2 }") {
+		t.Errorf("expected prDiff to contain the PR's own change, got:\n%s", prDiff)
+	}
+	if strings.TrimSpace(yourDiff) != "" {
+		t.Errorf("expected yourDiff to be empty before any local edit, got:\n%s", yourDiff)
+	}
+
+	// Reviewer edits and commits in the worktree -- the exact action the bug
+	// report was about. prDiff must stay byte-for-byte frozen; yourDiff must
+	// pick up exactly the reviewer's commit, and only that.
+	write("foo.go", "package main\n\nfunc Foo() int { return 99 }\n")
+	run("commit", "-am", "reviewer's local commit")
+
+	resp2 := getDiff()
+	prDiff2, _ := resp2["prDiff"].(string)
+	yourDiff2, _ := resp2["yourDiff"].(string)
+	if prDiff2 != prDiff {
+		t.Errorf("expected prDiff to stay frozen across the reviewer's commit, before:\n%s\nafter:\n%s", prDiff, prDiff2)
+	}
+	if !strings.Contains(yourDiff2, "-func Foo() int { return 2 }") || !strings.Contains(yourDiff2, "+func Foo() int { return 99 }") {
+		t.Errorf("expected yourDiff to show the reviewer's commit, got:\n%s", yourDiff2)
+	}
+}
+
 func TestGitStagedPaths(t *testing.T) {
 	if !gitInstalled() {
 		t.Skip("git not installed")
@@ -905,4 +1003,3 @@ func TestGitAheadBehind(t *testing.T) {
 		t.Fatalf("expected ahead=0 behind=0 after push, got ahead=%d behind=%d", ahead, behind)
 	}
 }
-

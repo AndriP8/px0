@@ -325,6 +325,7 @@ func (s *Server) handlePRMeta(w http.ResponseWriter, r *http.Request) {
 		"readOnly":        p.token == "",
 		"draftCount":      len(p.comments),
 		"diffBaseWarning": p.diffBaseWarning,
+		"headSHA":         p.meta.HeadSHA,
 		"url":             p.target.URL,
 	})
 }
@@ -457,6 +458,9 @@ func (s *Server) handlePRComments(w http.ResponseWriter, r *http.Request) {
 		p.nextID++
 		c := prComment{ID: p.nextID, Path: body.Path, Line: body.Line, Side: side, Body: strings.TrimSpace(body.Body)}
 		p.comments = append(p.comments, c)
+		if s.session != nil {
+			s.session.Update(func(ws *WorkspaceSession) { ws.Drafts = p.comments })
+		}
 		p.mu.Unlock()
 		writeJSON(w, c)
 	default:
@@ -480,6 +484,9 @@ func (s *Server) handlePRCommentDelete(w http.ResponseWriter, r *http.Request) {
 			p.comments = append(p.comments[:i], p.comments[i+1:]...)
 			break
 		}
+	}
+	if s.session != nil {
+		s.session.Update(func(ws *WorkspaceSession) { ws.Drafts = p.comments })
 	}
 	writeJSON(w, map[string]any{"ok": true})
 }
@@ -525,6 +532,9 @@ func (s *Server) handlePRSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Lock()
 	p.comments = nil
+	if s.session != nil {
+		s.session.Update(func(ws *WorkspaceSession) { ws.Drafts = nil })
+	}
 	p.mu.Unlock()
 	writeJSON(w, map[string]any{"ok": true})
 }

@@ -266,7 +266,10 @@ function findDiffRowEl(path, side, line) {
   if (!diffview || diffview.hidden) return null;
   const d = doc_();
   if (!d || d.path !== path) return null;
-  for (const el of diffview.querySelectorAll('[data-l], [data-old-l]')) {
+  // Review comments are only ever posted against the PR's own diff (see
+  // diff.js's reviewable flag), so a "Your changes" row sharing the same
+  // line number must never be matched here.
+  for (const el of diffview.querySelectorAll('[data-l]:not([data-reviewable="0"]), [data-old-l]:not([data-reviewable="0"])')) {
     const isOldOnly = el.dataset.oldL !== undefined && el.dataset.l === undefined;
     const elSide = isOldOnly ? 'LEFT' : 'RIGHT';
     const elLine = isOldOnly ? +el.dataset.oldL : +el.dataset.l;
@@ -455,7 +458,7 @@ function renderMarkersForActiveDoc() {
     existingByKey.get(key).push(c);
   }
   for (const el of diffview.querySelectorAll('.pr-comment-mark')) el.remove();
-  for (const el of diffview.querySelectorAll('[data-l], [data-old-l]')) {
+  for (const el of diffview.querySelectorAll('[data-l]:not([data-reviewable="0"]), [data-old-l]:not([data-reviewable="0"])')) {
     const isOldOnly = el.dataset.oldL !== undefined && el.dataset.l === undefined;
     const side = isOldOnly ? 'LEFT' : 'RIGHT';
     const line = isOldOnly ? +el.dataset.oldL : +el.dataset.l;

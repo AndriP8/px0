@@ -1,5 +1,5 @@
 // web/src/tabs.js
-import { $, esc, S, doc_, api, LH, CHUNK, withKeys } from './state.js';
+import { $, esc, S, doc_, api, apiPost, LH, CHUNK, withKeys } from './state.js';
 import { vp, sizer, rowsEl, editor } from './ui.js';
 import { render, layout, refineChunk } from './renderer.js';
 import { updateStatus, setStatusNote, refreshMetrics } from './status.js';
@@ -351,24 +351,26 @@ export function switchTab(i) {
   saveWorkspaceState();
 }
 
+let saveSessionTimer = null;
 export function saveWorkspaceState() {
-  try {
-    const tabs = S.tabs.map(t => ({ path: t.path, cur: t.cur }));
-    sessionStorage.setItem('px0.tabs', JSON.stringify({ tabs, active: S.active }));
-  } catch {}
+  if (saveSessionTimer) clearTimeout(saveSessionTimer);
+  saveSessionTimer = setTimeout(async () => {
+    try {
+      const tabs = S.tabs.map(t => ({ path: t.path }));
+      await apiPost('/api/session', { tabs, active: S.active });
+    } catch {}
+  }, 200);
 }
 
 export async function restoreWorkspaceTabs() {
   try {
-    const saved = sessionStorage.getItem('px0.tabs');
-    if (!saved) return false;
-    const { tabs, active } = JSON.parse(saved);
-    if (!Array.isArray(tabs) || tabs.length === 0) return false;
-    for (const t of tabs) {
-      if (t.path) await openFile(t.path, { line: t.cur, push: false });
+    const session = await api('/api/session');
+    if (!session || !Array.isArray(session.tabs) || session.tabs.length === 0) return false;
+    for (const t of session.tabs) {
+      if (t.path) await openFile(t.path, { push: false });
     }
-    if (typeof active === 'number' && active >= 0 && active < S.tabs.length) {
-      switchTab(active);
+    if (typeof session.active === 'number' && session.active >= 0 && session.active < S.tabs.length) {
+      switchTab(session.active);
     }
     return true;
   } catch {
