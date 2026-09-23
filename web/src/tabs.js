@@ -122,7 +122,10 @@ export async function loadGutter(d) {
 
 // Quietly re-fetches all open tabs on workspace reindex without tab-switching thrash.
 // Preserves live scroll position, cursor column/line (clamped), diff settings, and markdown scroll.
-export async function reloadOpenTabs() {
+// onlyIfChanged: leave a tab's doc untouched, and skip the repaint when no tab
+// changed, if the file comes back with the same size, line count and diff
+// availability. Keeps a background refresh from flickering an unchanged view.
+export async function reloadOpenTabs({ onlyIfChanged = false } = {}) {
   if (S.tabs.length === 0) return;
 
   const activeDoc = doc_();
@@ -141,6 +144,7 @@ export async function reloadOpenTabs() {
     start: t.cur ? Math.max(0, Math.floor((t.cur - 1) / CHUNK) * CHUNK) : 0,
   }));
 
+  let anyChanged = false;
   const results = await Promise.allSettled(
     targets.map(tgt => api('/api/file', { path: tgt.path, start: tgt.start, count: CHUNK }))
   );
@@ -166,6 +170,9 @@ export async function reloadOpenTabs() {
 
     const keep = tgt.oldDoc;
     const hasDiff = !!j.diffAvailable;
+    if (onlyIfChanged && keep.size === j.size && keep.total === j.total &&
+        !!keep.diffAvailable === hasDiff) continue;
+    anyChanged = true;
     const newCur = Math.max(1, Math.min(keep.cur || 1, j.total));
 
     /* A reload keeps each tab in the view it was in. The file changing under
@@ -209,6 +216,8 @@ export async function reloadOpenTabs() {
     S.tabs[idx] = d;
     if (j.refine) refineChunk(d, tgt.start / CHUNK);
   }
+
+  if (onlyIfChanged && !anyChanged) return;
 
   // Load all gutters concurrently before initial paint
   await Promise.allSettled(S.tabs.filter(t => !t.isImage).map(t => loadGutter(t)));
