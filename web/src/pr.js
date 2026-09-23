@@ -124,9 +124,19 @@ function renderBar() {
   if (reqBtn) reqBtn.hidden = !meta.writeAccess;
   if (appBtn) appBtn.hidden = !meta.writeAccess;
   const cmtBtn = $('#pr-submit-comment');
-  if (cmtBtn) cmtBtn.disabled = meta.readOnly;
+  if (cmtBtn) {
+    cmtBtn.disabled = false;
+    cmtBtn.title = meta.readOnly
+      ? 'No GitHub token configured -- click to connect and submit'
+      : 'Submit as a plain comment, no verdict';
+  }
   const composeEl = $('#pr-issue-compose');
-  if (composeEl) composeEl.hidden = meta.readOnly;
+  if (composeEl) composeEl.hidden = false;
+}
+
+export function nudgeGitHubToken() {
+  showToast('!', 'No GitHub token configured: set GITHUB_TOKEN, set GH_TOKEN, or run `gh auth login` -- or connect in Settings.', 5000);
+  openSettings('ui', 'GitHub', 'github.token');
 }
 
 function wireBarButtons() {
@@ -135,13 +145,14 @@ function wireBarButtons() {
   $('#pr-submit-request-changes')?.addEventListener('click', () => submitReview('REQUEST_CHANGES'));
   $('#pr-submit-approve')?.addEventListener('click', () => submitReview('APPROVE'));
   $('#pr-issue-compose-send')?.addEventListener('click', sendNewIssueComment);
-  $('#pr-readonly-note')?.addEventListener('click', () => {
-    showToast('!', 'No GitHub token found: set GITHUB_TOKEN, set GH_TOKEN, or run `gh auth login` -- or add one below.', 5000);
-    openSettings('ui', 'GitHub', 'github.token');
-  });
+  $('#pr-readonly-note')?.addEventListener('click', nudgeGitHubToken);
 }
 
 async function sendNewIssueComment() {
+  if (meta?.readOnly) {
+    nudgeGitHubToken();
+    return;
+  }
   const ta = $('#pr-issue-compose-body');
   if (!ta) return;
   const body = ta.value.trim();
@@ -234,6 +245,10 @@ async function pollPRBatch(id, count) {
 }
 
 async function submitReview(event) {
+  if (meta?.readOnly) {
+    nudgeGitHubToken();
+    return;
+  }
   const bodyEl = $('#pr-review-body');
   const body = bodyEl ? bodyEl.value.trim() : '';
   if (event === 'REQUEST_CHANGES' && !body && !comments.length) {
@@ -574,6 +589,10 @@ function wireCommentsPanel() {
 
 async function sendThreadReply(row) {
   if (!row) return;
+  if (meta?.readOnly) {
+    nudgeGitHubToken();
+    return;
+  }
   const ta = row.querySelector('.reply-input');
   const body = ta?.value.trim();
   if (!body) return;
@@ -636,9 +655,7 @@ function issueCommentCardHtml(c) {
     '</div>' +
     '<div class="acc-body">' +
       '<div class="pr-issue-comment-body">' + esc(c.body) + '</div>' +
-      (meta && !meta.readOnly
-        ? '<button class="pr-issue-comment-reply-btn" data-author="' + esc(c.author || '') + '">Reply</button>'
-        : '') +
+      '<button class="pr-issue-comment-reply-btn" data-author="' + esc(c.author || '') + '">Reply</button>' +
     '</div>' +
   '</div>';
 }
@@ -669,7 +686,7 @@ function threadHtml(path, t, key) {
   const loc = path + ':' + t.line + (t.side === 'LEFT' ? ' (base)' : '');
   const itemsHtml = sortedExisting.map(reviewCommentCardHtml).join('');
   const draftsHtml = t.drafts.map(draftCardHtml).join('');
-  const canReply = root && meta && !meta.readOnly;
+  const canReply = !!root;
   const replyRow = canReply
     ? '<div class="pr-comment-reply-row" data-reply-to="' + root.id + '">' +
       '<textarea class="pr-review-body reply-input" rows="1" spellcheck="false" autocomplete="off" placeholder="Reply..."></textarea>' +
