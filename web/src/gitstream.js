@@ -108,9 +108,11 @@ async function handleGitStatus(data) {
   const statuses = data.statuses || {};
   const dirtyDirs = data.dirtyDirs || {};
   const staged = data.staged || {};
+  const yourStatuses = data.yourStatuses || {};
+  const yourDirtyDirs = data.yourDirtyDirs || {};
 
   // Patch rendered tree items in place without full DOM reload
-  await patchTreeGitStatus(statuses, dirtyDirs, staged);
+  await patchTreeGitStatus(statuses, dirtyDirs, staged, yourStatuses, yourDirtyDirs);
   updateGitPanel(data);
 
   // Close tabs that were opened in git diff view or currently in diff view if their changes are gone.

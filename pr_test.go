@@ -385,7 +385,7 @@ func TestFetchPRMetaMerged(t *testing.T) {
 	}
 }
 
-func TestCheckoutPRMergedConfirmationDecline(t *testing.T) {
+func TestCheckoutPRMergedAlwaysProceeds(t *testing.T) {
 	orig := githubHTTPClient.Transport
 	defer func() { githubHTTPClient.Transport = orig }()
 
@@ -411,21 +411,11 @@ func TestCheckoutPRMergedConfirmationDecline(t *testing.T) {
 		}, nil
 	})
 
-	called := false
 	target := PRTarget{Provider: "github", Owner: "px0-ai", Repo: "px0", Number: 77}
-	_, err := checkoutPR(context.Background(), &GitHubProvider{}, target, t.TempDir(), nil, func(meta PRMeta) (bool, error) {
-		called = true
-		if meta.Number != 77 || !meta.Merged {
-			t.Errorf("unexpected meta in onMerged: %+v", meta)
-		}
-		return false, nil // user declines
-	})
-
-	if !called {
-		t.Fatal("onMerged callback was not invoked for merged PR")
-	}
-	if !errors.Is(err, ErrPRMergedCancelled) {
-		t.Errorf("err = %v, want ErrPRMergedCancelled", err)
+	_, err := checkoutPR(context.Background(), &GitHubProvider{}, target, t.TempDir(), nil)
+	// Must not be ErrPRMergedCancelled; merged PRs are always opened without blocking.
+	if errors.Is(err, ErrPRMergedCancelled) {
+		t.Errorf("err = %v, did not want ErrPRMergedCancelled", err)
 	}
 }
 

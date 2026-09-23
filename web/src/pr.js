@@ -128,7 +128,7 @@ function renderBar() {
     cmtBtn.disabled = false;
     cmtBtn.title = meta.readOnly
       ? 'No GitHub token configured -- click to connect and submit'
-      : 'Submit as a plain comment, no verdict';
+      : 'Submit review with drafts, without approval or change requests';
   }
   const composeEl = $('#pr-issue-compose');
   if (composeEl) composeEl.hidden = false;
@@ -515,11 +515,24 @@ function toggleAccordion(item) {
 
 function wireCommentsPanel() {
   const panel = $('#pr-comments-panel');
-  if (panel) panel.hidden = false;
+  if (panel) {
+    panel.hidden = false;
+    panel.classList.add('collapsed');
+  }
 
-  $('#pr-comments-collapse')?.addEventListener('click', () => {
+  const toggle = () => {
     panel?.classList.toggle('collapsed');
     layout(); render();
+  };
+
+  $('#pr-comments-collapse')?.addEventListener('click', e => {
+    e.stopPropagation();
+    toggle();
+  });
+
+  $('.pr-comments-panel-head')?.addEventListener('click', e => {
+    if (e.target.closest('#pr-comments-collapse')) return;
+    toggle();
   });
 
   const rz = $('#pr-comments-resizer');

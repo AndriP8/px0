@@ -62,14 +62,10 @@ sequenceDiagram
     participant Prov as GitProvider (github.go)
     participant Git as Host Git CLI
 
-    CLI->>PR: checkoutPR(ctx, provider, target, cwd, onProgress, onMerged)
+    CLI->>PR: checkoutPR(ctx, provider, target, cwd, onProgress)
     PR->>Prov: ResolveToken(cfg)
     PR->>Prov: FetchPR(ctx, target, token)
     Prov-->>PR: PRMeta (title, refs, state, merged)
-    alt PR is Merged
-        PR->>CLI: onMerged(meta)
-        CLI->>CLI: Prompt user [y/N] or check -y
-    end
     PR->>Git: Local clone exists? (git remote get-url origin)
     alt Matches Origin
         PR->>Git: git fetch refs/pull/n/head:refs/px0/pr/n
@@ -87,18 +83,10 @@ sequenceDiagram
 1. `Fetching PR #... metadata from <provider>...`
 2. `Fetching PR #... head and preparing worktree...` (or cloning)
 3. `Computing merge base with <baseRef>...`
-4. `PR #... checked out (<title>)`
+4. `PR #... checked out (<title>)` (or `[merged]` if already merged)
 
-### Already-Merged Confirmation
-When `meta.Merged` is true:
-1. `onMerged` stops the spinner.
-2. In interactive terminals, it asks:
-   ```text
-   ! PR #123 is already merged into main  <Title>
-     ? Open anyway? [y/N]
-   ```
-3. If the user declines (or in non-interactive environments without `-y`), `checkoutPR` returns `ErrPRMergedCancelled` and exits cleanly with code 0.
-4. If `-y` or `-yes` is supplied, it logs a warning and proceeds automatically.
+### Merged PR Handling
+When `meta.Merged` is true, px0 does not block or prompt: it proceeds immediately to check out the PR and surfaces the merged status with a `[merged]` badge in the CLI and a purple `Merged` pill badge in the review header.
 
 ---
 

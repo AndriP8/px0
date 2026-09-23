@@ -130,14 +130,16 @@ function renderDiff(d) {
       diffContent.append(p);
       return;
     }
-    frag.append(sectionHeader('pr', 'PR changes', 'from ' + (S.meta.pr.base || 'base')));
-    if (!d.prDiffHunks.length) frag.append(sectionNote('The PR itself makes no change to this file.'));
-    else appendHunks(frag, d.prDiffHunks, d.diffMode, true);
+    frag.append(createDiffSection(d, 'pr', 'PR changes', 'from ' + (S.meta.pr.base || 'base'), (body) => {
+      if (!d.prDiffHunks.length) body.append(sectionNote('The PR itself makes no change to this file.'));
+      else appendHunks(body, d.prDiffHunks, d.diffMode, true);
+    }));
 
     const since = S.meta.pr.headSHA ? 'since ' + S.meta.pr.headSHA.slice(0, 7) : 'since checkout';
-    frag.append(sectionHeader('you', 'Your changes', since));
-    if (!d.yourDiffHunks.length) frag.append(sectionNote('Nothing edited or committed yet — changes you make will show up here.'));
-    else appendHunks(frag, d.yourDiffHunks, d.diffMode, false);
+    frag.append(createDiffSection(d, 'you', 'Your changes', since, (body) => {
+      if (!d.yourDiffHunks.length) body.append(sectionNote('Nothing edited or committed yet — changes you make will show up here.'));
+      else appendHunks(body, d.yourDiffHunks, d.diffMode, false);
+    }));
   } else {
     if (!d.diffHunks || !d.diffHunks.length) {
       const p = document.createElement('div');
@@ -153,20 +155,52 @@ function renderDiff(d) {
   if (prSyncHandler) prSyncHandler();
 }
 
-function sectionHeader(kind, title, sub) {
-  const el = document.createElement('div');
-  el.className = 'diff-section-head diff-section-head-' + kind;
+function createDiffSection(d, kind, title, sub, populateBody) {
+  const sec = document.createElement('div');
+  sec.className = 'diff-section diff-section-' + kind;
+  const collapsedKey = kind + 'Collapsed';
+  if (d[collapsedKey]) {
+    sec.classList.add('collapsed');
+  }
+
+  const head = document.createElement('div');
+  head.className = 'diff-section-head diff-section-head-' + kind;
+  head.title = 'Click to collapse/expand section';
+
   const t = document.createElement('span');
   t.className = 'diff-section-title';
   t.textContent = title;
-  el.append(t);
+  head.append(t);
+
   if (sub) {
     const s = document.createElement('span');
     s.className = 'diff-section-sub';
     s.textContent = sub;
-    el.append(s);
+    head.append(s);
   }
-  return el;
+
+  const grow = document.createElement('span');
+  grow.className = 'grow';
+  head.append(grow);
+
+  const btn = document.createElement('button');
+  btn.className = 'pr-comments-collapse diff-section-collapse';
+  btn.title = 'Collapse/Expand';
+  btn.innerHTML = '&#9662;';
+  head.append(btn);
+
+  const body = document.createElement('div');
+  body.className = 'diff-section-body';
+  populateBody(body);
+
+  head.addEventListener('click', () => {
+    sec.classList.toggle('collapsed');
+    d[collapsedKey] = sec.classList.contains('collapsed');
+    if (prSyncHandler) prSyncHandler();
+  });
+
+  sec.append(head, body);
+  return sec;
 }
 
 function sectionNote(text) {

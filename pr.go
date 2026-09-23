@@ -100,7 +100,7 @@ func computeDiffBase(worktree, srcRepo string, target PRTarget, baseRef string, 
 // the same repo (the common case -- opened inside the repo), or a shallow
 // single-branch clone of the PR head otherwise (a bare URL opened from an
 // unrelated directory).
-func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd string, onProgress func(string), onMerged func(meta PRMeta) (bool, error)) (*prSession, error) {
+func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd string, onProgress func(string)) (*prSession, error) {
 	cfg := readSettings()
 	token, _ := provider.ResolveToken(cfg)
 
@@ -110,16 +110,6 @@ func checkoutPR(ctx context.Context, provider GitProvider, target PRTarget, cwd 
 	meta, err := provider.FetchPR(ctx, target, token)
 	if err != nil {
 		return nil, err
-	}
-
-	if meta.Merged && onMerged != nil {
-		proceed, err := onMerged(meta)
-		if err != nil {
-			return nil, err
-		}
-		if !proceed {
-			return nil, ErrPRMergedCancelled
-		}
 	}
 
 	tmp, err := os.MkdirTemp("", "px0-pr-*")

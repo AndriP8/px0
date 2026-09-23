@@ -112,12 +112,12 @@
         <span id="pr-draft-count" class="pr-draft-count"></span>
       </div>
       <div class="pr-bar-row pr-review-row">
-        <textarea id="pr-review-body" class="pr-review-body" rows="1" spellcheck="false" autocomplete="off" placeholder="Leave an overall review comment (optional)..."></textarea>
+        <textarea id="pr-review-body" class="pr-review-body" rows="1" spellcheck="false" autocomplete="off" placeholder="Review summary / verdict comment (optional)..."></textarea>
         <button id="pr-batch-apply" class="footer-btn pr-btn-batch-apply" hidden title="Dispatch AI agent to apply all draft review comments directly to the codebase">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="footer-btn-icon"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg>
           <span class="footer-btn-label">Batch Apply</span>
         </button>
-        <button id="pr-submit-comment" class="footer-btn pr-btn-neutral" title="Submit as a plain comment, no verdict">Comment</button>
+        <button id="pr-submit-comment" class="footer-btn pr-btn-neutral" title="Submit review with drafts, without approval or change requests">Submit Review</button>
         <button id="pr-submit-request-changes" class="footer-btn pr-btn-request-changes" hidden title="Request changes on this PR">Request Changes</button>
         <button id="pr-submit-approve" class="footer-btn pr-btn-approve" hidden title="Approve this PR">Approve</button>
       </div>
@@ -299,19 +299,19 @@
     <!-- PR comments bottom panel: existing GitHub comments (top-level and
          inline) plus your own draft review comments, open by default for the
          life of a PR review session. web/src/pr.js owns everything in it. -->
-    <div id="pr-comments-panel" class="pr-comments-panel" hidden>
+    <div id="pr-comments-panel" class="pr-comments-panel collapsed" hidden>
       <div id="pr-comments-resizer" class="pr-comments-resizer" title="Drag to resize"></div>
       <div class="pr-comments-panel-head">
         <span class="pr-comments-panel-title">Comments</span>
         <span id="pr-comments-count" class="pr-comments-count"></span>
         <span class="grow"></span>
-        <button id="pr-comments-collapse" class="pr-comments-collapse" title="Collapse">&#9662;</button>
+        <button id="pr-comments-collapse" class="pr-comments-collapse" title="Expand/collapse comments panel">&#9662;</button>
       </div>
       <div id="pr-comments-body" class="pr-comments-body">
         <div id="pr-comments-list" class="pr-comments-list"></div>
         <div id="pr-issue-compose" class="pr-issue-compose">
-          <textarea id="pr-issue-compose-body" class="pr-review-body" rows="2" spellcheck="false" autocomplete="off" placeholder="Write a new PR comment..."></textarea>
-          <button id="pr-issue-compose-send" class="footer-btn">Comment</button>
+          <textarea id="pr-issue-compose-body" class="pr-review-body" rows="2" spellcheck="false" autocomplete="off" placeholder="Write a comment on the PR conversation..."></textarea>
+          <button id="pr-issue-compose-send" class="footer-btn">Post Comment</button>
         </div>
       </div>
     </div>

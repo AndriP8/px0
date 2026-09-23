@@ -357,7 +357,7 @@ func TestUpdateGitStatus(t *testing.T) {
 	ix := NewIndex(root)
 	ix.Build()
 
-	count, files, changed, statuses, dirtyDirs, _ := ix.UpdateGitStatus()
+	count, files, changed, statuses, dirtyDirs, _, _, _ := ix.UpdateGitStatus()
 	// Should be unchanged because Build() just ran
 	if changed {
 		t.Errorf("expected changed=false immediately after Build(), got true")
@@ -377,7 +377,7 @@ func TestUpdateGitStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	count2, _, changed2, statuses2, _, _ := ix.UpdateGitStatus()
+	count2, _, changed2, statuses2, _, _, _, _ := ix.UpdateGitStatus()
 	if !changed2 {
 		t.Errorf("expected changed=true after modifying keep.go")
 	}
@@ -389,7 +389,7 @@ func TestUpdateGitStatus(t *testing.T) {
 	}
 
 	// Calling it again without changes should report changed=false
-	_, _, changed3, _, _, _ := ix.UpdateGitStatus()
+	_, _, changed3, _, _, _, _, _ := ix.UpdateGitStatus()
 	if changed3 {
 		t.Errorf("expected changed=false when worktree has not changed")
 	}
@@ -586,7 +586,7 @@ func TestGitStatusAgainstAndPRDiff(t *testing.T) {
 	ix.SetDiffBase(baseSHA)
 	ix.Build()
 
-	count, files, _, statuses, _, _ := ix.UpdateGitStatus()
+	count, files, _, statuses, _, _, _, _ := ix.UpdateGitStatus()
 	if count == 0 || statuses["foo.go"] != "M" {
 		t.Fatalf("expected Index to report foo.go as M against diffBase, got count=%d statuses=%v files=%v", count, statuses, files)
 	}
@@ -625,7 +625,7 @@ func TestGitStatusAgainstAndPRDiff(t *testing.T) {
 	write("foo.go", "package main\n\nfunc Foo() int { return 99 }\n")
 
 	// ix.UpdateGitStatus() must catch the modification
-	_, _, changed, statuses, _, _ := ix.UpdateGitStatus()
+	_, _, changed, statuses, _, _, _, _ := ix.UpdateGitStatus()
 	if !changed && statuses["foo.go"] != "M" {
 		t.Errorf("expected UpdateGitStatus to report foo.go as changed/M, got changed=%v statuses=%v", changed, statuses)
 	}
@@ -1001,5 +1001,98 @@ func TestGitAheadBehind(t *testing.T) {
 	ahead, behind, _ = gitAheadBehind(localDir)
 	if ahead != 0 || behind != 0 {
 		t.Fatalf("expected ahead=0 behind=0 after push, got ahead=%d behind=%d", ahead, behind)
+	}
+}
+
+func TestPRReviewerChangesInIndex(t *testing.T) {
+	if !gitAvailable(".") {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	gitTestRun(t, root, "init", "-b", "main")
+	gitTestRun(t, root, "config", "user.name", "test")
+	gitTestRun(t, root, "config", "user.email", "test@example.com")
+
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pkg", "foo.go"), []byte("package pkg\nfunc A() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTestRun(t, root, "add", ".")
+	gitTestRun(t, root, "commit", "-m", "base commit")
+	baseSHA := strings.TrimSpace(gitTestRun(t, root, "rev-parse", "HEAD"))
+
+	// PR changes foo.go
+	if err := os.WriteFile(filepath.Join(root, "pkg", "foo.go"), []byte("package pkg\nfunc A() {}\nfunc PR() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTestRun(t, root, "add", ".")
+	gitTestRun(t, root, "commit", "-m", "pr head commit")
+	prHeadSHA := strings.TrimSpace(gitTestRun(t, root, "rev-parse", "HEAD"))
+
+	ix := NewIndex(root)
+	ix.SetDiffBase(baseSHA)
+	ix.SetPRHead(prHeadSHA)
+	ix.Build()
+
+	// Initially, working tree matches prHeadSHA:
+	// Statuses should report foo.go as M (against diffBase), but yourStatuses must be empty.
+	count, files, _, statuses, _, _, yourStatuses, yourDirtyDirs := ix.UpdateGitStatus()
+	if count != 1 || len(files) != 1 || statuses["pkg/foo.go"] != "M" {
+		t.Fatalf("expected 1 file in PR diff, got statuses=%v", statuses)
+	}
+	if len(yourStatuses) != 0 || len(yourDirtyDirs) != 0 {
+		t.Fatalf("expected empty yourStatuses initially, got %v", yourStatuses)
+	}
+
+	// Now reviewer edits foo.go
+	if err := os.WriteFile(filepath.Join(root, "pkg", "foo.go"), []byte("package pkg\nfunc A() {}\nfunc PR() {}\nfunc Reviewer() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, changed, statuses, _, _, yourStatuses, yourDirtyDirs := ix.UpdateGitStatus()
+	if !changed {
+		t.Errorf("expected changed=true after reviewer modification")
+	}
+	if statuses["pkg/foo.go"] != "M" {
+		t.Errorf("expected statuses[pkg/foo.go] = M, got %q", statuses["pkg/foo.go"])
+	}
+	if yourStatuses["pkg/foo.go"] != "M" {
+		t.Errorf("expected yourStatuses[pkg/foo.go] = M, got %q", yourStatuses["pkg/foo.go"])
+	}
+	if !yourDirtyDirs["pkg"] {
+		t.Errorf("expected yourDirtyDirs[pkg] = true, got %v", yourDirtyDirs)
+	}
+
+	// Check ix.Children() to verify Node fields
+	kids, ok := ix.Children("pkg")
+	if !ok || len(kids) != 1 {
+		t.Fatalf("expected 1 child in pkg, got %v", kids)
+	}
+	if kids[0].YourStatus != "M" {
+		t.Errorf("expected node YourStatus=M, got %q", kids[0].YourStatus)
+	}
+
+	// Now reviewer reverts all changes (restore to prHeadSHA)
+	gitTestRun(t, root, "checkout", "--", ".")
+
+	_, _, changed2, statuses, _, _, yourStatuses, yourDirtyDirs := ix.UpdateGitStatus()
+	if !changed2 {
+		t.Errorf("expected changed=true after revert")
+	}
+	if statuses["pkg/foo.go"] != "M" {
+		t.Errorf("expected PR change to remain in statuses, got %v", statuses)
+	}
+	if len(yourStatuses) != 0 {
+		t.Errorf("expected yourStatuses to be empty after revert, got %v", yourStatuses)
+	}
+	if len(yourDirtyDirs) != 0 {
+		t.Errorf("expected yourDirtyDirs to be empty after revert, got %v", yourDirtyDirs)
+	}
+
+	kids2, _ := ix.Children("pkg")
+	if len(kids2) > 0 && kids2[0].YourStatus != "" {
+		t.Errorf("expected node YourStatus to be cleared after revert, got %q", kids2[0].YourStatus)
 	}
 }

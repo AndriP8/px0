@@ -19,6 +19,8 @@ type GitStatusPayload struct {
 	Statuses      map[string]string `json:"statuses"`
 	DirtyDirs     map[string]bool   `json:"dirtyDirs,omitempty"`
 	Staged        map[string]bool   `json:"staged,omitempty"`
+	YourStatuses  map[string]string `json:"yourStatuses,omitempty"`
+	YourDirtyDirs map[string]bool   `json:"yourDirtyDirs,omitempty"`
 	Branch        string            `json:"branch,omitempty"`
 	RecentCommits []GitCommit       `json:"recentCommits,omitempty"`
 	CommitsURL    string            `json:"commitsUrl,omitempty"`
@@ -182,7 +184,7 @@ func (gw *GitWatcher) loop(ctx context.Context, gitdir string) {
 // Refresh runs an immediate UpdateGitStatus, broadcasts to subscribers if changed,
 // and returns the latest git status payload.
 func (gw *GitWatcher) Refresh() GitStatusPayload {
-	count, files, changed, statuses, dirtyDirs, staged := gw.ix.UpdateGitStatus()
+	count, files, changed, statuses, dirtyDirs, staged, yourStatuses, yourDirtyDirs := gw.ix.UpdateGitStatus()
 	var recentCommits []GitCommit
 	var ahead, behind int
 	if gitAvailable(gw.root) {
@@ -210,6 +212,8 @@ func (gw *GitWatcher) Refresh() GitStatusPayload {
 		Statuses:      statuses,
 		DirtyDirs:     dirtyDirs,
 		Staged:        staged,
+		YourStatuses:  yourStatuses,
+		YourDirtyDirs: yourDirtyDirs,
 		Branch:        branch,
 		RecentCommits: recentCommits,
 		CommitsURL:    gitCommitsWebURL(gw.root, branch),
@@ -261,11 +265,19 @@ func (gw *GitWatcher) Subscribe() (<-chan []byte, func()) {
 		count, files := gw.ix.GitChanges()
 		statuses := gw.ix.GitStatusMap()
 		staged := gw.ix.GitStagedMap()
+		yourStatuses := gw.ix.GitYourStatusMap()
 		dirtyDirs := map[string]bool{}
 		for p := range statuses {
 			for i := strings.LastIndexByte(p, '/'); i >= 0; i = strings.LastIndexByte(p, '/') {
 				p = p[:i]
 				dirtyDirs[p] = true
+			}
+		}
+		yourDirtyDirs := map[string]bool{}
+		for p := range yourStatuses {
+			for i := strings.LastIndexByte(p, '/'); i >= 0; i = strings.LastIndexByte(p, '/') {
+				p = p[:i]
+				yourDirtyDirs[p] = true
 			}
 		}
 		branch := gitCurrentBranch(gw.root)
@@ -277,6 +289,8 @@ func (gw *GitWatcher) Subscribe() (<-chan []byte, func()) {
 			Statuses:      statuses,
 			DirtyDirs:     dirtyDirs,
 			Staged:        staged,
+			YourStatuses:  yourStatuses,
+			YourDirtyDirs: yourDirtyDirs,
 			Branch:        branch,
 			RecentCommits: gitRecentCommits(gw.root, 5),
 			CommitsURL:    gitCommitsWebURL(gw.root, branch),

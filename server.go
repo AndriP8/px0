@@ -400,6 +400,7 @@ func (s *Server) SetPR(p *prSession) {
 		s.prHeadSHA = p.meta.HeadSHA
 		if s.ix != nil {
 			s.ix.SetDiffBase(p.diffBase)
+			s.ix.SetPRHead(p.meta.HeadSHA)
 		}
 		if s.gitWatcher != nil {
 			s.gitWatcher.Trigger()
@@ -816,7 +817,13 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	_, coming := d.Exact()
 	diffAvail := false
 	if gitAvailable(s.ix.Root()) {
-		diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != ""
+		if s.pr != nil {
+			diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != "" ||
+				gitDiffBetween(s.ix.Root(), rel, s.diffBase, s.prHeadSHA) != "" ||
+				gitDiffAgainst(s.ix.Root(), rel, s.prHeadSHA) != ""
+		} else {
+			diffAvail = gitDiffAgainst(s.ix.Root(), rel, s.diffBase) != ""
+		}
 	}
 	writeJSON(w, map[string]any{
 		"path": rel, "lang": d.Lang, "total": d.Total, "maxCols": d.MaxCols,
@@ -878,11 +885,16 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		}
 		uiStatus("info", "diff", fmt.Sprintf("%s · %s", rel, status), 0, os.Stdout)
 	}
-	resp := map[string]any{"path": rel, "diff": diff, "available": diff != ""}
+	avail := diff != ""
+	resp := map[string]any{"path": rel, "diff": diff}
 	if s.pr != nil {
-		resp["prDiff"] = gitDiffBetween(s.ix.Root(), rel, s.diffBase, s.prHeadSHA)
-		resp["yourDiff"] = gitDiffAgainst(s.ix.Root(), rel, s.prHeadSHA)
+		prDiff := gitDiffBetween(s.ix.Root(), rel, s.diffBase, s.prHeadSHA)
+		yourDiff := gitDiffAgainst(s.ix.Root(), rel, s.prHeadSHA)
+		resp["prDiff"] = prDiff
+		resp["yourDiff"] = yourDiff
+		avail = avail || prDiff != "" || yourDiff != ""
 	}
+	resp["available"] = avail
 	writeJSON(w, resp)
 }
 
@@ -1183,6 +1195,7 @@ func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 		s.pr.mu.Unlock()
 		if s.ix != nil {
 			s.ix.SetDiffBase(s.diffBase)
+			s.ix.SetPRHead(s.prHeadSHA)
 		}
 		if s.gitWatcher != nil {
 			s.gitWatcher.Trigger()

@@ -25,9 +25,11 @@ type Node struct {
 	Dir     bool   `json:"dir"`
 	Size    int64  `json:"size"`
 	Ignored bool   `json:"ignored,omitempty"` // matched by .gitignore: listed, never indexed
-	Status  string `json:"status,omitempty"`  // git working-tree status: M/A/D/?/R/C/U
-	Staged  bool   `json:"staged,omitempty"`  // file: has staged (index) changes
-	Dirty   bool   `json:"dirty,omitempty"`   // folder: contains a git-changed descendant
+	Status     string `json:"status,omitempty"`     // git working-tree status: M/A/D/?/R/C/U
+	Staged     bool   `json:"staged,omitempty"`     // file: has staged (index) changes
+	Dirty      bool   `json:"dirty,omitempty"`      // folder: contains a git-changed descendant
+	YourStatus string `json:"yourStatus,omitempty"` // PR mode: reviewer's change since checkout
+	YourDirty  bool   `json:"yourDirty,omitempty"`  // PR mode folder: contains reviewer-changed descendant
 }
 
 // vcsDirs are version control internals. Unlike other ignored entries they are
@@ -46,7 +48,9 @@ type Index struct {
 	gitFiles     []string
 	gitStatusMap map[string]string
 	gitStagedMap map[string]bool
+	gitYourStatusMap map[string]string
 	diffBase     string
+	prHead       string
 	readyCh      chan struct{}
 }
 
@@ -66,6 +70,18 @@ func (ix *Index) DiffBase() string {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	return ix.diffBase
+}
+
+func (ix *Index) SetPRHead(head string) {
+	ix.mu.Lock()
+	ix.prHead = head
+	ix.mu.Unlock()
+}
+
+func (ix *Index) PRHead() string {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.prHead
 }
 
 func (ix *Index) Ready() bool {
@@ -127,6 +143,19 @@ func (ix *Index) GitStagedMap() map[string]bool {
 	}
 	res := make(map[string]bool, len(ix.gitStagedMap))
 	for k, v := range ix.gitStagedMap {
+		res[k] = v
+	}
+	return res
+}
+
+func (ix *Index) GitYourStatusMap() map[string]string {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	if ix.gitYourStatusMap == nil {
+		return map[string]string{}
+	}
+	res := make(map[string]string, len(ix.gitYourStatusMap))
+	for k, v := range ix.gitYourStatusMap {
 		res[k] = v
 	}
 	return res
@@ -244,6 +273,19 @@ func (ix *Index) Build() {
 		})
 	}
 
+	head := ix.PRHead()
+	var yourStatuses map[string]string
+	yourDirtyDirs := map[string]bool{}
+	if head != "" {
+		yourStatuses = gitStatusAgainst(ix.root, head)
+		for p := range yourStatuses {
+			for i := strings.LastIndexByte(p, '/'); i >= 0; i = strings.LastIndexByte(p, '/') {
+				p = p[:i]
+				yourDirtyDirs[p] = true
+			}
+		}
+	}
+
 	var (
 		mu       sync.Mutex
 		files    []FileEntry
@@ -288,7 +330,7 @@ func (ix *Index) Build() {
 				continue
 			}
 			if isDir {
-				kids = append(kids, Node{Name: name, Path: childRel, Dir: true, Dirty: dirtyDirs[childRel]})
+				kids = append(kids, Node{Name: name, Path: childRel, Dir: true, Dirty: dirtyDirs[childRel], YourDirty: yourDirtyDirs[childRel]})
 				subdirs = append(subdirs, struct{ abs, rel string }{filepath.Join(abs, name), childRel})
 				continue
 			}
@@ -296,7 +338,7 @@ func (ix *Index) Build() {
 			if err != nil {
 				continue
 			}
-			kids = append(kids, Node{Name: name, Path: childRel, Size: info.Size(), Status: gs[childRel], Staged: staged[childRel]})
+			kids = append(kids, Node{Name: name, Path: childRel, Size: info.Size(), Status: gs[childRel], Staged: staged[childRel], YourStatus: yourStatuses[childRel]})
 			mu.Lock()
 			files = append(files, FileEntry{
 				Path: childRel, Name: name, Size: info.Size(),
@@ -345,6 +387,7 @@ func (ix *Index) Build() {
 	ix.gitFiles = gitFiles
 	ix.gitStatusMap = gs
 	ix.gitStagedMap = staged
+	ix.gitYourStatusMap = yourStatuses
 	ix.files, ix.children = files, children
 	ix.builtAt, ix.buildMS = time.Now(), time.Since(start).Milliseconds()
 	select {
@@ -358,11 +401,11 @@ func (ix *Index) Build() {
 // UpdateGitStatus re-runs git status, updates in-memory status codes, staged
 // flags, and dirty directory markers across ix.children without re-walking
 // the filesystem tree. Reports gitChanges count, gitFiles list, whether
-// anything changed (status or staged), and the raw status/staged/dirty-dir
+// anything changed (status, staged, or yourStatus), and the raw status/staged/dirty-dir
 // maps.
-func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, statuses map[string]string, dirtyDirs map[string]bool, staged map[string]bool) {
+func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, statuses map[string]string, dirtyDirs map[string]bool, staged map[string]bool, yourStatuses map[string]string, yourDirtyDirs map[string]bool) {
 	if !ix.Ready() || gitDisabled || !gitAvailable(ix.root) {
-		return 0, nil, false, nil, nil, nil
+		return 0, nil, false, nil, nil, nil, nil, nil
 	}
 
 	base := ix.DiffBase()
@@ -373,6 +416,22 @@ func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, sta
 	sg := gitStagedPaths(ix.root)
 	if sg == nil {
 		sg = map[string]bool{}
+	}
+
+	head := ix.PRHead()
+	var ys map[string]string
+	newYourDirtyDirs := map[string]bool{}
+	if head != "" {
+		ys = gitStatusAgainst(ix.root, head)
+		if ys == nil {
+			ys = map[string]string{}
+		}
+		for p := range ys {
+			for i := strings.LastIndexByte(p, '/'); i >= 0; i = strings.LastIndexByte(p, '/') {
+				p = p[:i]
+				newYourDirtyDirs[p] = true
+			}
+		}
 	}
 
 	newDirtyDirs := map[string]bool{}
@@ -395,8 +454,8 @@ func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, sta
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 
-	// Check if status and staged maps are both unchanged
-	same := len(gs) == len(ix.gitStatusMap) && len(sg) == len(ix.gitStagedMap)
+	// Check if status, staged, and yourStatuses maps are all unchanged
+	same := len(gs) == len(ix.gitStatusMap) && len(sg) == len(ix.gitStagedMap) && len(ys) == len(ix.gitYourStatusMap)
 	if same {
 		for k, v := range gs {
 			if ix.gitStatusMap[k] != v {
@@ -414,9 +473,17 @@ func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, sta
 		}
 	}
 	if same {
+		for k, v := range ys {
+			if ix.gitYourStatusMap[k] != v {
+				same = false
+				break
+			}
+		}
+	}
+	if same {
 		resFiles := make([]string, len(ix.gitFiles))
 		copy(resFiles, ix.gitFiles)
-		return ix.gitChanges, resFiles, false, gs, newDirtyDirs, sg
+		return ix.gitChanges, resFiles, false, gs, newDirtyDirs, sg, ys, newYourDirtyDirs
 	}
 
 	// Update nodes in-place across ix.children
@@ -424,9 +491,11 @@ func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, sta
 		for i := range kids {
 			if kids[i].Dir {
 				kids[i].Dirty = newDirtyDirs[kids[i].Path]
+				kids[i].YourDirty = newYourDirtyDirs[kids[i].Path]
 			} else {
 				kids[i].Status = gs[kids[i].Path]
 				kids[i].Staged = sg[kids[i].Path]
+				kids[i].YourStatus = ys[kids[i].Path]
 			}
 		}
 	}
@@ -435,8 +504,9 @@ func (ix *Index) UpdateGitStatus() (count int, files []string, changed bool, sta
 	ix.gitFiles = newGitFiles
 	ix.gitStatusMap = gs
 	ix.gitStagedMap = sg
+	ix.gitYourStatusMap = ys
 
 	resFiles := make([]string, len(ix.gitFiles))
 	copy(resFiles, ix.gitFiles)
-	return ix.gitChanges, resFiles, true, gs, newDirtyDirs, sg
+	return ix.gitChanges, resFiles, true, gs, newDirtyDirs, sg, ys, newYourDirtyDirs
 }

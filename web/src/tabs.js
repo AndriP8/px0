@@ -197,6 +197,8 @@ export async function reloadOpenTabs() {
       diffDismissed: !!keep.diffDismissed || !keep.diffMode,
       openedInDiffView: !!keep.openedInDiffView || !!keep.diffMode,
       diffScroll: keep === activeDoc && keep.diffMode ? diffScrollTop() : 0,
+      prCollapsed: keep.prCollapsed,
+      youCollapsed: keep.youCollapsed,
     };
 
     for (let k = 0; k < j.lines.length; k++) {

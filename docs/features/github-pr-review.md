@@ -37,20 +37,10 @@ Because fetching metadata and checking out remote references takes a few moments
 ✔ PR #123 checked out (Refactor auth token resolution)
 ```
 
-### Merged PR Handling & Confirmation
+### Merged PR Handling
 If the pull request is already merged:
-- px0 detects its merged status from the API.
-- In interactive terminals, it pauses and prompts for confirmation:
-  ```text
-  ! PR #123 is already merged into main  Refactor auth token resolution
-    ? Open anyway? [y/N]
-  ```
-- Typing `y` continues with the review session; pressing Enter or typing `n` cleanly aborts.
-- To bypass the prompt (for scripting or automated environments), pass `-y` or `-yes`:
-  ```bash
-  px0 -y https://github.com/owner/repo/pull/123
-  ```
-- In both the CLI banner and the browser review header, a prominent purple **`Merged`** pill badge is displayed.
+- px0 detects its merged status from the API and opens it directly without blocking.
+- In both the CLI checkout message and the browser review header, a prominent purple **`Merged`** pill badge is displayed.
 
 ### Multi-Session Isolation
 Each PR review runs as its own isolated process on its own port. Running `px0 https://github.com/owner/repo/pull/456` while another PR review or local workspace is open will not disturb existing sessions.
