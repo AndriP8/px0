@@ -45,6 +45,7 @@ func main() {
 		noAgent      = flag.Bool("no-agent", false, "do not offer editing through a coding harness")
 		yesFlag      = flag.Bool("y", false, "answer yes to prompts (e.g. open already merged PRs)")
 		yesFlagLong  = flag.Bool("yes", false, "answer yes to prompts (alias for -y)")
+		basePathFlag = flag.String("base-path", "", "base URL path prefix to serve endpoints and assets from (e.g. /rev-123/)")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "px0 %s - a code navigator\n\nusage:\n  px0 [flags] [file or directory]\n  px0 [flags] <pr-url>\n\nflags:\n", version)
@@ -168,7 +169,14 @@ func main() {
 	tel := NewTelemetryService(*noTelemetry)
 	defer tel.Close("normal")
 
-	pxSrv := NewServer(ix, lsp)
+	configuredBasePath := "/"
+	if *basePathFlag != "" {
+		configuredBasePath = cleanBasePath(*basePathFlag)
+	} else if cfg := readSettings(); cfg.ServerBasePath != nil && *cfg.ServerBasePath != "" {
+		configuredBasePath = cleanBasePath(*cfg.ServerBasePath)
+	}
+
+	pxSrv := NewServer(ix, lsp, configuredBasePath)
 	if pr != nil {
 		pxSrv.SetPR(pr)
 	}
@@ -183,7 +191,7 @@ func main() {
 
 	srv := &http.Server{Handler: pxSrv}
 
-	url := viewerURL(addr, initialFile, initialLine)
+	url := viewerURL(addr, initialFile, initialLine, configuredBasePath)
 	uiHeading("px0 "+version, nil, os.Stdout)
 	if pr != nil {
 		prTitle := fmt.Sprintf("#%d %s", pr.meta.Number, pr.meta.Title)
@@ -359,8 +367,15 @@ func splitTargetLine(target string) (path string, line int) {
 	return target, 0
 }
 
-func viewerURL(addr, initialFile string, initialLine int) string {
+func viewerURL(addr, initialFile string, initialLine int, basePath ...string) string {
 	u := url.URL{Scheme: "http", Host: addr}
+	bp := "/"
+	if len(basePath) > 0 && basePath[0] != "" {
+		bp = cleanBasePath(basePath[0])
+	}
+	if bp != "/" {
+		u.Path = bp
+	}
 	q := u.Query()
 	if initialFile != "" {
 		q.Set("path", filepath.ToSlash(initialFile))

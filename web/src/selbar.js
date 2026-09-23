@@ -151,8 +151,8 @@ export function selectAll() {
   window.getSelection()?.removeAllRanges();
   S.selAll = d;
   allInfo = null;
-  render();
-  const text = allText = fetch('/api/raw?path=' + encodeURIComponent(d.path))
+  const rawUrl = new URL('api/raw?path=' + encodeURIComponent(d.path), document.baseURI || location.href).href;
+  const text = allText = fetch(rawUrl)
     .then(r => { if (!r.ok) throw new Error(r.statusText); return r.text(); });
   text.then(t => {
     if (allText !== text) return; // cleared or selected again meanwhile

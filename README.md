@@ -64,6 +64,9 @@ px0 https://github.com/owner/repo/pull/123
 
 # Remote or headless server mode
 px0 -host 0.0.0.0 -port 7777 ~/workspace
+
+# Behind a reverse proxy under a subpath
+px0 -base-path /rev-123/ -host 0.0.0.0 -port 7777 ~/workspace
 ```
 
 ## Development

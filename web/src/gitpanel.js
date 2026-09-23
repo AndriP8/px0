@@ -50,6 +50,10 @@ export function initGitPanel() {
   $('#git-pull')?.addEventListener('click', doPull);
   $('#git-generate-msg')?.addEventListener('click', doCommitWithAI);
   $('#git-settings-nudge')?.addEventListener('click', () => openSettings('ui', 'Git & Diff'));
+  $('#git-token-nudge')?.addEventListener('click', () => {
+    showToast('!', 'No GitHub token found: set GITHUB_TOKEN, set GH_TOKEN, or run `gh auth login` -- or add one below.', 5000);
+    openSettings('ui', 'GitHub', 'github.token');
+  });
   $('#git-instructions-link')?.addEventListener('click', e => {
     e.preventDefault();
     openSettings('ui', 'Git & Diff', 'git.commitMessageInstruction');
@@ -66,6 +70,12 @@ function updateGitPanelVisibility() {
   const p = panel();
   if (!p) return;
   p.hidden = !S.meta?.git;
+  const nudge = $('#git-token-nudge');
+  if (nudge) {
+    // The PR bar already carries its own "no GitHub token" note, so skip
+    // this one in PR review mode to avoid nudging twice.
+    nudge.hidden = !S.meta?.git || S.meta?.githubToken !== false || !!S.meta?.pr;
+  }
 }
 
 // Called from gitstream.js's handleGitStatus with each SSE/refresh payload,

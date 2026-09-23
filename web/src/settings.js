@@ -272,6 +272,14 @@ const BUILTIN_SCHEMA = [
     category: "Agent / AI",
     type: "boolean",
     default: false
+  },
+  {
+    key: "server.basePath",
+    title: "Base Path",
+    description: "Base URL path prefix for the px0 server and web interface (e.g. /rev-123/).",
+    category: "Server",
+    type: "string",
+    default: "/"
   }
 ];
 

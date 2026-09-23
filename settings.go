@@ -31,6 +31,7 @@ type settings struct {
 	TelemetryEnabled            *bool    `json:"telemetry.enabled,omitempty"`
 	GitHubToken                 *string  `json:"github.token,omitempty"`
 	GitCommitMessageInstruction *string  `json:"git.commitMessageInstruction,omitempty"`
+	ServerBasePath              *string  `json:"server.basePath,omitempty"`
 }
 
 var settingsMu sync.Mutex
@@ -348,6 +349,14 @@ var settingsSchema = []settingSchemaItem{
 		Default:     "",
 		Secret:      true,
 	},
+	{
+		Key:         "server.basePath",
+		Title:       "Base Path",
+		Description: "Base URL path prefix for the px0 server and web interface (e.g. /rev-123/).",
+		Category:    "Server",
+		Type:        "string",
+		Default:     "/",
+	},
 }
 
 func defaultSettingsMap() map[string]any {
@@ -404,6 +413,14 @@ func readSettingsLocked() settings {
 			s.Agent = h
 		}
 	}
+	// Support server.basePath and basePath fallback
+	if s.ServerBasePath == nil {
+		if bp, ok := raw["server.basePath"].(string); ok && bp != "" {
+			s.ServerBasePath = &bp
+		} else if bp, ok := raw["basePath"].(string); ok && bp != "" {
+			s.ServerBasePath = &bp
+		}
+	}
 	// Bi-directional bridge between models <-> agent.models
 	if s.Models == nil || len(s.Models) == 0 {
 		if am, ok := raw["agent.models"].(map[string]any); ok {
@@ -443,6 +460,13 @@ func readMergedSettingsMap() map[string]any {
 		res["agent.models"] = m
 	} else if am, ok := raw["agent.models"].(map[string]any); ok && len(am) > 0 {
 		res["models"] = am
+	}
+
+	// Synchronize server.basePath / basePath
+	if bp, ok := raw["server.basePath"].(string); ok && bp != "" {
+		res["server.basePath"] = bp
+	} else if bp, ok := raw["basePath"].(string); ok && bp != "" {
+		res["server.basePath"] = bp
 	}
 
 	return res
@@ -544,6 +568,24 @@ func updateSettingsMap(updates map[string]any) error {
 				delete(raw, "models")
 			} else {
 				raw["models"] = v
+			}
+		}
+
+		// Keep server.basePath / basePath in sync
+		if k == "server.basePath" {
+			if v == nil || v == "" {
+				delete(raw, "server.basePath")
+				delete(raw, "basePath")
+			} else {
+				raw["server.basePath"] = v
+			}
+		} else if k == "basePath" {
+			if v == nil || v == "" {
+				delete(raw, "server.basePath")
+				delete(raw, "basePath")
+			} else {
+				raw["server.basePath"] = v
+				raw["basePath"] = v
 			}
 		}
 	}

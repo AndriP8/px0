@@ -51,7 +51,8 @@ function connect() {
   }
 
   try {
-    eventSource = new EventSource('/api/stream');
+    const streamUrl = new URL('api/stream', document.baseURI || location.href).href;
+    eventSource = new EventSource(streamUrl);
 
     eventSource.addEventListener('git-status', async e => {
       try {

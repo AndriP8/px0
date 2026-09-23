@@ -14,7 +14,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -40,6 +42,21 @@ func useDiskAssets(dir string) error {
 	return nil
 }
 
+func cleanBasePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || p == "/" || p == "." {
+		return "/"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = path.Clean(p)
+	if !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p
+}
+
 type Server struct {
 	ix         *Index
 	lsp        *lspManager
@@ -48,69 +65,120 @@ type Server struct {
 	diffBase   string        // ref /api/diff and /api/gutter diff against; "HEAD" unless in PR mode
 	gitWatcher *GitWatcher
 	mux        *http.ServeMux
+	basePath   string
 
 	lastReq atomic.Int64 // unix nanos of the most recent request
 }
 
-func NewServer(ix *Index, lsp *lspManager) *Server {
+func (s *Server) BasePath() string {
+	if s.basePath == "" {
+		return "/"
+	}
+	return s.basePath
+}
+
+func (s *Server) SetBasePath(bp string) {
+	s.basePath = cleanBasePath(bp)
+	s.mux = http.NewServeMux()
+	s.registerRoutes()
+}
+
+func (s *Server) routePath(subpath string) string {
+	if s.basePath == "" || s.basePath == "/" {
+		return subpath
+	}
+	bp := strings.TrimSuffix(s.basePath, "/")
+	if !strings.HasPrefix(subpath, "/") {
+		return bp + "/" + subpath
+	}
+	return bp + subpath
+}
+
+func (s *Server) registerRoutes() {
+	sub, _ := fs.Sub(assets, "web")
+	staticPrefix := s.routePath("/static/")
+	s.mux.Handle(staticPrefix, http.StripPrefix(staticPrefix, http.FileServer(http.FS(sub))))
+	s.mux.HandleFunc(s.routePath("/static/themes.css"), s.handleThemes)
+
+	if s.basePath != "/" && s.basePath != "" {
+		s.mux.HandleFunc(s.basePath, s.handleIndex)
+		trimmed := strings.TrimSuffix(s.basePath, "/")
+		s.mux.HandleFunc(trimmed, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, s.basePath, http.StatusMovedPermanently)
+		})
+		s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/" {
+				http.Redirect(w, r, s.basePath, http.StatusFound)
+				return
+			}
+			http.NotFound(w, r)
+		})
+	} else {
+		s.mux.HandleFunc("/", s.handleIndex)
+	}
+
+	s.mux.HandleFunc(s.routePath("/api/meta"), s.handleMeta)
+	s.mux.HandleFunc(s.routePath("/api/metrics"), s.handleMetrics)
+	s.mux.HandleFunc(s.routePath("/api/tree"), s.handleTree)
+	s.mux.HandleFunc(s.routePath("/api/find"), s.handleFind)
+	s.mux.HandleFunc(s.routePath("/api/file"), s.handleFile)
+	s.mux.HandleFunc(s.routePath("/api/close"), s.handleClose)
+	s.mux.HandleFunc(s.routePath("/api/raw"), s.handleRaw)
+	s.mux.HandleFunc(s.routePath("/api/markdown"), s.handleMarkdown)
+	s.mux.HandleFunc(s.routePath("/api/diff"), s.handleDiff)
+	s.mux.HandleFunc(s.routePath("/api/gutter"), s.handleGutter)
+	s.mux.HandleFunc(s.routePath("/api/stream"), s.handleEventStream)
+	s.mux.HandleFunc(s.routePath("/api/git/stream"), s.handleEventStream)
+	s.mux.HandleFunc(s.routePath("/api/git/refresh"), s.handleGitRefresh)
+	s.mux.HandleFunc(s.routePath("/api/git/stage"), s.handleGitStage)
+	s.mux.HandleFunc(s.routePath("/api/git/unstage"), s.handleGitUnstage)
+	s.mux.HandleFunc(s.routePath("/api/git/commit"), s.handleGitCommit)
+	s.mux.HandleFunc(s.routePath("/api/git/commit-message"), s.handleGitCommitMessage)
+	s.mux.HandleFunc(s.routePath("/api/git/push"), s.handleGitPush)
+	s.mux.HandleFunc(s.routePath("/api/git/pull"), s.handleGitPull)
+	s.mux.HandleFunc(s.routePath("/api/git/log"), s.handleGitLog)
+	s.mux.HandleFunc(s.routePath("/api/search"), s.handleSearch)
+	s.mux.HandleFunc(s.routePath("/api/outline"), s.handleOutline)
+	s.mux.HandleFunc(s.routePath("/api/def"), s.handleDef)
+	s.mux.HandleFunc(s.routePath("/api/reindex"), s.handleReindex)
+	s.mux.HandleFunc(s.routePath("/api/lsp/def"), s.handleLSPDef)
+	s.mux.HandleFunc(s.routePath("/api/lsp/refs"), s.handleLSPRefs)
+	s.mux.HandleFunc(s.routePath("/api/lsp/calls"), s.handleLSPCalls)
+	s.mux.HandleFunc(s.routePath("/api/lsp/symbols"), s.handleLSPSymbols)
+	s.mux.HandleFunc(s.routePath("/api/lsp/hover"), s.handleLSPHover)
+	s.mux.HandleFunc(s.routePath("/api/lsp/warm"), s.handleLSPWarm)
+	s.mux.HandleFunc(s.routePath("/api/lsp/setup"), s.handleLSPSetup)
+	s.mux.HandleFunc(s.routePath("/api/lsp/install"), s.handleLSPInstall)
+	s.mux.HandleFunc(s.routePath("/api/lsp/start"), s.handleLSPStart)
+	s.mux.HandleFunc(s.routePath("/api/agent/harnesses"), s.handleAgentHarnesses)
+	s.mux.HandleFunc(s.routePath("/api/agent/select"), s.handleAgentSelect)
+	s.mux.HandleFunc(s.routePath("/api/agent/edit"), s.handleAgentEdit)
+	s.mux.HandleFunc(s.routePath("/api/agent/batch"), s.handleAgentBatchEdit)
+	s.mux.HandleFunc(s.routePath("/api/agent/job"), s.handleAgentJob)
+	s.mux.HandleFunc(s.routePath("/api/agent/cancel"), s.handleAgentCancel)
+	s.mux.HandleFunc(s.routePath("/api/settings"), s.handleSettings)
+	s.mux.HandleFunc(s.routePath("/api/pr/meta"), s.handlePRMeta)
+	s.mux.HandleFunc(s.routePath("/api/pr/comments"), s.handlePRComments)
+	s.mux.HandleFunc(s.routePath("/api/pr/comments/delete"), s.handlePRCommentDelete)
+	s.mux.HandleFunc(s.routePath("/api/pr/submit"), s.handlePRSubmit)
+	s.mux.HandleFunc(s.routePath("/api/pr/launch"), s.handleLaunchPR)
+	s.mux.HandleFunc(s.routePath("/api/pr/existing-comments"), s.handlePRExistingComments)
+	s.mux.HandleFunc(s.routePath("/api/pr/comments/issue"), s.handlePRIssueCommentPost)
+	s.mux.HandleFunc(s.routePath("/api/pr/comments/review-reply"), s.handlePRReviewCommentReply)
+}
+
+func NewServer(ix *Index, lsp *lspManager, basePaths ...string) *Server {
 	if lsp == nil {
 		lsp = newLSPManager(ix.Root(), false)
 	}
-	s := &Server{ix: ix, lsp: lsp, diffBase: "HEAD", mux: http.NewServeMux()}
+	bp := "/"
+	if len(basePaths) > 0 && basePaths[0] != "" {
+		bp = cleanBasePath(basePaths[0])
+	}
+	s := &Server{ix: ix, lsp: lsp, diffBase: "HEAD", basePath: bp, mux: http.NewServeMux()}
 	s.gitWatcher = NewGitWatcher(ix)
 	s.gitWatcher.Start(context.Background())
-	sub, _ := fs.Sub(assets, "web")
-	s.mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(sub))))
-	s.mux.HandleFunc("/static/themes.css", s.handleThemes)
-	s.mux.HandleFunc("/", s.handleIndex)
-	s.mux.HandleFunc("/api/meta", s.handleMeta)
-	s.mux.HandleFunc("/api/metrics", s.handleMetrics)
-	s.mux.HandleFunc("/api/tree", s.handleTree)
-	s.mux.HandleFunc("/api/find", s.handleFind)
-	s.mux.HandleFunc("/api/file", s.handleFile)
-	s.mux.HandleFunc("/api/close", s.handleClose)
-	s.mux.HandleFunc("/api/raw", s.handleRaw)
-	s.mux.HandleFunc("/api/markdown", s.handleMarkdown)
-	s.mux.HandleFunc("/api/diff", s.handleDiff)
-	s.mux.HandleFunc("/api/gutter", s.handleGutter)
-	s.mux.HandleFunc("/api/stream", s.handleEventStream)
-	s.mux.HandleFunc("/api/git/stream", s.handleEventStream)
-	s.mux.HandleFunc("/api/git/refresh", s.handleGitRefresh)
-	s.mux.HandleFunc("/api/git/stage", s.handleGitStage)
-	s.mux.HandleFunc("/api/git/unstage", s.handleGitUnstage)
-	s.mux.HandleFunc("/api/git/commit", s.handleGitCommit)
-	s.mux.HandleFunc("/api/git/commit-message", s.handleGitCommitMessage)
-	s.mux.HandleFunc("/api/git/push", s.handleGitPush)
-	s.mux.HandleFunc("/api/git/pull", s.handleGitPull)
-	s.mux.HandleFunc("/api/git/log", s.handleGitLog)
-	s.mux.HandleFunc("/api/search", s.handleSearch)
-	s.mux.HandleFunc("/api/outline", s.handleOutline)
-	s.mux.HandleFunc("/api/def", s.handleDef)
-	s.mux.HandleFunc("/api/reindex", s.handleReindex)
-	s.mux.HandleFunc("/api/lsp/def", s.handleLSPDef)
-	s.mux.HandleFunc("/api/lsp/refs", s.handleLSPRefs)
-	s.mux.HandleFunc("/api/lsp/calls", s.handleLSPCalls)
-	s.mux.HandleFunc("/api/lsp/symbols", s.handleLSPSymbols)
-	s.mux.HandleFunc("/api/lsp/hover", s.handleLSPHover)
-	s.mux.HandleFunc("/api/lsp/warm", s.handleLSPWarm)
-	s.mux.HandleFunc("/api/lsp/setup", s.handleLSPSetup)
-	s.mux.HandleFunc("/api/lsp/install", s.handleLSPInstall)
-	s.mux.HandleFunc("/api/lsp/start", s.handleLSPStart)
-	s.mux.HandleFunc("/api/agent/harnesses", s.handleAgentHarnesses)
-	s.mux.HandleFunc("/api/agent/select", s.handleAgentSelect)
-	s.mux.HandleFunc("/api/agent/edit", s.handleAgentEdit)
-	s.mux.HandleFunc("/api/agent/batch", s.handleAgentBatchEdit)
-	s.mux.HandleFunc("/api/agent/job", s.handleAgentJob)
-	s.mux.HandleFunc("/api/agent/cancel", s.handleAgentCancel)
-	s.mux.HandleFunc("/api/settings", s.handleSettings)
-	s.mux.HandleFunc("/api/pr/meta", s.handlePRMeta)
-	s.mux.HandleFunc("/api/pr/comments", s.handlePRComments)
-	s.mux.HandleFunc("/api/pr/comments/delete", s.handlePRCommentDelete)
-	s.mux.HandleFunc("/api/pr/submit", s.handlePRSubmit)
-	s.mux.HandleFunc("/api/pr/launch", s.handleLaunchPR)
-	s.mux.HandleFunc("/api/pr/existing-comments", s.handlePRExistingComments)
-	s.mux.HandleFunc("/api/pr/comments/issue", s.handlePRIssueCommentPost)
-	s.mux.HandleFunc("/api/pr/comments/review-reply", s.handlePRReviewCommentReply)
+	s.registerRoutes()
 	s.lastReq.Store(time.Now().UnixNano())
 	go s.scavenge()
 	return s
@@ -140,8 +208,11 @@ func (s *Server) scavenge() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	isSSE := r.URL.Path == "/api/stream" || r.URL.Path == "/api/git/stream" || r.Header.Get("Accept") == "text/event-stream"
-	if r.URL.Path != "/api/metrics" && !isSSE {
+	streamPath := s.routePath("/api/stream")
+	gitStreamPath := s.routePath("/api/git/stream")
+	metricsPath := s.routePath("/api/metrics")
+	isSSE := r.URL.Path == streamPath || r.URL.Path == gitStreamPath || r.Header.Get("Accept") == "text/event-stream"
+	if r.URL.Path != metricsPath && !isSSE {
 		s.lastReq.Store(time.Now().UnixNano())
 	}
 	start := time.Now()
@@ -337,7 +408,8 @@ func (s *Server) agentHarnesses() []agentHarness {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	expected := s.BasePath()
+	if r.URL.Path != expected && r.URL.Path != strings.TrimSuffix(expected, "/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -346,8 +418,18 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err.Error())
 		return
 	}
+	html := string(b)
+	baseTag := fmt.Sprintf(`<base href="%s">`, expected)
+	if strings.Contains(html, "<base ") {
+		re := regexp.MustCompile(`<base\s+href="[^"]*">`)
+		html = re.ReplaceAllString(html, baseTag)
+	} else if idx := strings.Index(html, "<head>"); idx != -1 {
+		html = html[:idx+6] + "\n" + baseTag + html[idx+6:]
+	} else {
+		html = baseTag + "\n" + html
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(b)
+	io.WriteString(w, html)
 }
 
 // handleThemes joins web/themes/*.css into one stylesheet in file name order, so
@@ -376,6 +458,7 @@ func (s *Server) handleThemes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	n, at, ms := s.ix.Stats()
 	gitCount, gitFiles := s.ix.GitChanges()
+	githubToken, _ := resolveGitHubToken(readSettings())
 	meta := map[string]any{
 		"root":        s.ix.Root(),
 		"name":        filepath.Base(s.ix.Root()),
@@ -386,9 +469,11 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"git":         gitAvailable(s.ix.Root()),
 		"gitChanges":  gitCount,
 		"gitFiles":    gitFiles,
+		"githubToken": githubToken != "",
 		"lspServers":  s.lsp.Available(),
-		"metrics":     getProcessMetrics(),
+		"metrics":     getProcessMetrics(s.lsp),
 		"version":     version,
+		"basePath":    s.BasePath(),
 		"agent":       s.agent.Name(),
 		"agentModel":  s.agent.Model(),
 		"agentPinned": s.agent.Pinned(),
@@ -418,7 +503,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, getProcessMetrics())
+	writeJSON(w, getProcessMetrics(s.lsp))
 }
 
 // lspCtx bounds how long a caller is willing to wait. Language servers can take
@@ -812,7 +897,7 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Immediately send initial metrics on connection (for unified stream)
 	if includeMetrics {
-		if mBytes, err := json.Marshal(getProcessMetrics()); err == nil {
+		if mBytes, err := json.Marshal(getProcessMetrics(s.lsp)); err == nil {
 			if _, err := fmt.Fprintf(w, "event: metrics\ndata: %s\n\n", mBytes); err != nil {
 				return
 			}
@@ -856,7 +941,7 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 
 		case <-metricsC:
-			if mBytes, err := json.Marshal(getProcessMetrics()); err == nil {
+			if mBytes, err := json.Marshal(getProcessMetrics(s.lsp)); err == nil {
 				if _, err := fmt.Fprintf(w, "event: metrics\ndata: %s\n\n", mBytes); err != nil {
 					return
 				}

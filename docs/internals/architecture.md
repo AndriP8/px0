@@ -52,6 +52,12 @@ sequenceDiagram
 
 The server is implemented in [`server.go`](../../server.go) using Go's standard `http.ServeMux`. Every request passes through a centralized `ServeHTTP` wrapper that records activity timestamps, tracks status codes and durations, applies pooled Gzip compression when accepted by the client (excluding SSE streams), and logs every HTTP request to the terminal when the `-verbose` flag is active.
 
+### Base Path & Subpath Prefixing
+When hosted behind reverse proxies or multi-tenant review platforms, px0 supports custom URL prefixes via the `-base-path` CLI flag or `server.basePath` in settings (e.g. `/rev-123/`):
+- All routes below are prefixed with the base path (`/<base-path>/api/...`, `/<base-path>/static/...`).
+- `handleIndex` dynamically injects `<base href="/<base-path>/">` into `web/index.html`, allowing the frontend to resolve relative assets and API endpoints without domain-level assumptions.
+- Requests to `/<base-path>` without a trailing slash redirect to `/<base-path>/`, and root `/` redirects to the configured base path.
+
 ### Endpoints Reference
 
 | Endpoint              | Method | Purpose                                                                 | Response Format                            |

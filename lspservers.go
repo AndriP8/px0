@@ -314,6 +314,30 @@ func (m *lspManager) Available() []string {
 	return cp
 }
 
+// Enabled reports whether language server support is on for this session
+// (-no-lsp turns it off process-wide).
+func (m *lspManager) Enabled() bool { return m.enabled }
+
+// memBytes returns the combined resident memory of every currently running
+// language server process, best-effort: a server whose RSS can't be read
+// (exited, unsupported platform, no permission) contributes 0.
+func (m *lspManager) memBytes() uint64 {
+	m.mu.Lock()
+	pids := make([]int, 0, len(m.clients))
+	for _, c := range m.clients {
+		if c.cmd != nil && c.cmd.Process != nil && c.alive() == nil {
+			pids = append(pids, c.cmd.Process.Pid)
+		}
+	}
+	m.mu.Unlock()
+
+	var total uint64
+	for _, pid := range pids {
+		total += readRSSForPID(pid)
+	}
+	return total
+}
+
 func (m *lspManager) defFor(rel string) *lspServerDef {
 	if !m.enabled {
 		return nil

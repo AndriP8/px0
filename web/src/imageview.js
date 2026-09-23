@@ -31,7 +31,7 @@ export function renderImageView(d) {
   const canvas = $('#imgview-canvas');
   if (!img || !canvas) return;
 
-  const rawUrl = '/api/raw?path=' + encodeURIComponent(d.path);
+  const rawUrl = new URL('api/raw?path=' + encodeURIComponent(d.path), document.baseURI || location.href).href;
   if (img.dataset.curPath !== d.path) {
     img.dataset.curPath = d.path;
     img.src = rawUrl;

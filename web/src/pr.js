@@ -13,6 +13,7 @@ import { diffview, setPRSyncHandler } from './diff.js';
 import { reloadWorkspace } from './agent.js';
 import { openFile } from './tabs.js';
 import { layout, render } from './renderer.js';
+import { openSettings } from './settings.js';
 
 let meta = null;      // this session's PR info: {number, title, base, head, writeAccess, readOnly}
 let comments = [];    // draft comments known to the server
@@ -134,6 +135,10 @@ function wireBarButtons() {
   $('#pr-submit-request-changes')?.addEventListener('click', () => submitReview('REQUEST_CHANGES'));
   $('#pr-submit-approve')?.addEventListener('click', () => submitReview('APPROVE'));
   $('#pr-issue-compose-send')?.addEventListener('click', sendNewIssueComment);
+  $('#pr-readonly-note')?.addEventListener('click', () => {
+    showToast('!', 'No GitHub token found: set GITHUB_TOKEN, set GH_TOKEN, or run `gh auth login` -- or add one below.', 5000);
+    openSettings('ui', 'GitHub', 'github.token');
+  });
 }
 
 async function sendNewIssueComment() {

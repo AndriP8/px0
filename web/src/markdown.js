@@ -178,10 +178,10 @@ function mdSetImage(img, src, base) {
   } else if (src.startsWith('//')) {
     img.setAttribute('src', src);
     img.dataset.origSrc = src;
-  } else if (src) {
     const t = mdLocal(src, base);
     if (t) {
-      img.setAttribute('src', '/api/raw?path=' + encodeURIComponent(t.path));
+      const rawUrl = new URL('api/raw?path=' + encodeURIComponent(t.path), document.baseURI || location.href).href;
+      img.setAttribute('src', rawUrl);
       img.dataset.rawPath = t.path;
       img.dataset.origSrc = src;
     }
@@ -206,7 +206,8 @@ function mdSetLink(a, href, base) {
   }
   const t = mdLocal(href, base);
   if (!t) return;
-  a.setAttribute('href', '/api/raw?path=' + encodeURIComponent(t.path));
+  const rawUrl = new URL('api/raw?path=' + encodeURIComponent(t.path), document.baseURI || location.href).href;
+  a.setAttribute('href', rawUrl);
   a.dataset.path = t.path;
   if (t.hash) a.dataset.anchor = t.hash;
 }

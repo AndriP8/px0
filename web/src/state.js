@@ -4,7 +4,9 @@ export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 export const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const request = async (method, path, params, opts = {}) => {
-  const u = new URL(path, location.origin);
+  const relPath = path.startsWith('/') ? path.slice(1) : path;
+  const base = document.baseURI || (location.origin + '/');
+  const u = new URL(relPath, base);
   const fetchOpts = { method, ...opts };
   const isPost = method === 'POST' || method === 'PUT' || method === 'PATCH';
 

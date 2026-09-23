@@ -119,6 +119,11 @@ let lastMetrics = null;
 
 function renderMetricsMenu(m) {
   if (!metricsMenuEl || !m) return;
+  const lspRow = m.lspEnabled ? `
+      <div class="metrics-row">
+        <span class="metrics-label">Language Servers (RSS)</span>
+        <span class="metrics-val">${fmtBytes(m.lspMemBytes || 0)}</span>
+      </div>` : '';
   metricsMenuEl.innerHTML = `
     <div class="metrics-title">
       <span>Process Metrics</span>
@@ -136,7 +141,7 @@ function renderMetricsMenu(m) {
       <div class="metrics-row">
         <span class="metrics-label">Active Goroutines</span>
         <span class="metrics-val">${m.goroutines || 0}</span>
-      </div>
+      </div>${lspRow}
     </div>
   `;
 }
@@ -173,6 +178,10 @@ export function updateMetricsDisplay(m) {
   const ramEl = $('#st-ram');
   if (cpuEl) cpuEl.textContent = `${m.cpuUsage.toFixed(1)}%`;
   if (ramEl) ramEl.textContent = fmtBytes(m.rssBytes);
+  const lspWrap = $('#st-lspmem-wrap');
+  const lspEl = $('#st-lspmem');
+  if (lspWrap) lspWrap.hidden = !m.lspEnabled;
+  if (lspEl && m.lspEnabled) lspEl.textContent = fmtBytes(m.lspMemBytes || 0);
   if (metricsMenuEl && !metricsMenuEl.hidden) {
     renderMetricsMenu(m);
     placeMetricsMenu();
