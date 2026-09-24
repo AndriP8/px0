@@ -14,6 +14,9 @@ export function showPanel(name) {
 }
 
 export async function reindexWorkspace() {
+  const btn = $('#btn-reindex');
+  const svg = btn?.querySelector('svg');
+  if (svg) svg.classList.add('spin');
   try {
     const j = await api('/api/reindex');
     S.meta.files = j.files; S.meta.indexMs = j.indexMs;
@@ -31,6 +34,8 @@ export async function reindexWorkspace() {
     showToast('✓', 'Workspace refreshed');
   } catch (e) {
     showToast('!', 'Refresh failed: ' + e.message);
+  } finally {
+    if (svg) svg.classList.remove('spin');
   }
 }
 

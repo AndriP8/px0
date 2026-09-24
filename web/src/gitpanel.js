@@ -4,7 +4,7 @@
 // review session (S.meta.pr set), Push/Pull target the PR's actual head
 // branch instead of the checkout's own remote -- see pr.go's Push/Pull.
 import { $, esc, S, api, apiPostJson } from './state.js';
-import { showToast, copyToClipboard } from './ui.js';
+import { showToast, copyToClipboard, flashActionSuccess } from './ui.js';
 import { reindexWorkspace } from './panels.js';
 import { refreshPRMeta } from './pr.js';
 import { openSettings } from './settings.js';
@@ -44,8 +44,9 @@ export function initGitPanel() {
     });
   }
 
-  $('#git-stage-all')?.addEventListener('click', () => stagePath('.'));
+  $('#git-stage-all')?.addEventListener('click', doStageAll);
   $('#git-commit')?.addEventListener('click', doCommit);
+  $('#git-commit-msg')?.addEventListener('input', () => $('#git-commit-msg')?.classList.remove('warn-border'));
   $('#git-push')?.addEventListener('click', doPush);
   $('#git-pull')?.addEventListener('click', doPull);
   $('#git-generate-msg')?.addEventListener('click', doCommitWithAI);
@@ -165,6 +166,27 @@ export async function stagePath(path) {
   }
 }
 
+async function doStageAll() {
+  const btn = $('#git-stage-all');
+  const prevText = btn?.textContent || 'Stage All';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Staging...';
+  }
+  try {
+    await apiPostJson('/api/git/stage', { path: '.' });
+    if (btn) {
+      btn.textContent = prevText;
+      flashActionSuccess(btn, 'Staged');
+    }
+  } catch (e) {
+    if (btn) btn.textContent = prevText;
+    showToast('!', e.message || 'Could not stage');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 export async function unstagePath(path) {
   try {
     await apiPostJson('/api/git/unstage', { path });
@@ -197,18 +219,37 @@ async function doCommit() {
   }
   const message = ta ? ta.value.trim() : '';
   if (!message) {
+    if (ta) {
+      ta.classList.remove('shake');
+      void ta.offsetWidth;
+      ta.classList.add('shake', 'warn-border');
+      setTimeout(() => ta.classList.remove('shake'), 350);
+      ta.focus();
+    }
     showToast('!', 'Write a commit message first');
     return;
   }
   const btn = $('#git-commit');
-  if (btn) btn.disabled = true;
+  const prevText = btn?.textContent || 'Commit';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Committing...';
+  }
   try {
     await apiPostJson('/api/git/commit', { message });
-    if (ta) ta.value = '';
+    if (ta) {
+      ta.value = '';
+      ta.classList.remove('warn-border');
+    }
     toggleCommitMsgBox(false);
     showToast('✓', 'Committed');
+    if (btn) {
+      btn.textContent = prevText;
+      flashActionSuccess(btn, 'Committed');
+    }
     await fetchRecentCommits();
   } catch (e) {
+    if (btn) btn.textContent = prevText;
     showToast('!', e.message || 'Commit failed');
   } finally {
     if (btn) btn.disabled = false;
@@ -217,16 +258,22 @@ async function doCommit() {
 
 async function doPush() {
   const btn = $('#git-push');
-  if (btn) btn.disabled = true;
+  const prevText = btn?.textContent || 'Push';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Pushing...';
+  }
   try {
     await apiPostJson('/api/git/push', {});
     showToast('✓', 'Pushed');
     if (btn) {
       btn.textContent = 'Push';
+      flashActionSuccess(btn, 'Pushed');
       btn.title = 'No unpushed commits to push';
       btn.disabled = true;
     }
   } catch (e) {
+    if (btn) btn.textContent = prevText;
     showToast('!', e.message || 'Push failed');
     if (btn) btn.disabled = false;
   }
@@ -234,14 +281,23 @@ async function doPush() {
 
 async function doPull() {
   const btn = $('#git-pull');
-  if (btn) btn.disabled = true;
+  const prevText = btn?.textContent || 'Pull';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Pulling...';
+  }
   try {
     const j = await apiPostJson('/api/git/pull', {});
     showToast('✓', j.message || 'Pulled');
+    if (btn) {
+      btn.textContent = 'Pull';
+      flashActionSuccess(btn, 'Pulled');
+    }
     await reindexWorkspace();
     if (S.meta?.pr) await refreshPRMeta();
     await fetchRecentCommits();
   } catch (e) {
+    if (btn) btn.textContent = prevText;
     showToast('!', e.message || 'Pull failed');
   } finally {
     if (btn) btn.disabled = false;
@@ -369,14 +425,22 @@ async function commitWithMessage(message, btn) {
   try {
     await apiPostJson('/api/git/commit', { message });
     const ta = $('#git-commit-msg');
-    if (ta) ta.value = '';
+    if (ta) {
+      ta.value = '';
+      ta.classList.remove('warn-border');
+    }
     showToast('✓', 'Committed with AI');
     await fetchRecentCommits();
+    if (btn) {
+      btn.textContent = 'Stage all + Commit with AI';
+      flashActionSuccess(btn, 'Committed');
+    }
   } catch (e) {
     toggleCommitMsgBox(true); // surface the generated message so it isn't lost
     showToast('!', e.message || 'Commit failed');
   } finally {
-    resetGenerateBtn(btn);
+    if (!btn?._flashTimer) resetGenerateBtn(btn);
+    else btn.disabled = false;
   }
 }
 
@@ -462,7 +526,7 @@ function renderRecentCommits(commits, max = 5) {
     row.addEventListener('click', () => {
       const h = row.dataset.hash;
       if (h) {
-        copyToClipboard(h, 'Copied ' + h);
+        copyToClipboard(h, 'Copied ' + h, row);
       }
     });
   });

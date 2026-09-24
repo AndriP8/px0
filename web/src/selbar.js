@@ -182,7 +182,7 @@ export function copySelectAll() {
 
 /* Runs one of the bar's actions on the current selection. Returns false when the
    bar is not showing, so a shortcut can fall through to the browser. */
-export function runSelectionAction(act) {
+export function runSelectionAction(act, triggerBtn = null) {
   if (!current) {
     if (act === 'agent-edit') {
       const d = doc_();
@@ -197,13 +197,14 @@ export function runSelectionAction(act) {
   }
   const { text, path } = current;
   const ref = selectionRef(current);
+  const targetBtn = triggerBtn || $('#footer-sel [data-sel="' + act + '"]');
   if (act === 'copy-ref') {
-    copyToClipboard(ref, 'Copied');
+    copyToClipboard(ref, 'Copied', targetBtn);
   } else if (act === 'copy-agent') {
     const ext = path.split('.').pop() || '';
     const lineStr = current.l1 === current.l2 ? 'line ' + current.l1 : 'lines ' + current.l1 + '-' + current.l2;
     const snippet = '@' + path + ' ' + lineStr + '\n```' + ext + '\n' + text + '\n```';
-    copyToClipboard(snippet, 'Copied');
+    copyToClipboard(snippet, 'Copied', targetBtn);
   } else if (act === 'agent-edit') {
     if (!agentHandler) return false;
     agentHandler(current);
@@ -287,7 +288,7 @@ export function initSelectionBar() {
       const btn = e.target.closest('[data-sel]');
       if (!btn) return;
       closeSelMenu();
-      runSelectionAction(btn.dataset.sel);
+      runSelectionAction(btn.dataset.sel, btn);
     });
   }
   if (!menu) return;

@@ -913,7 +913,8 @@ body.word-wrap .c { white-space: pre-wrap; word-break: break-word; overflow-wrap
   display: grid; place-items: center; color: var(--dim);
   background: var(--bg3); border: 1px solid var(--line); opacity: 0; transition: opacity .12s;
 }
-.md-pre:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
+.md-pre:hover .md-copy, .md-copy:focus-visible, .md-copy.copied { opacity: 1; }
+.md-copy.copied { border-color: var(--gi); color: var(--gi); }
 .md-copy:hover { color: var(--fg); border-color: var(--accent); }
 .md-copy svg { display: block; }
 .md table { display: block; width: max-content; max-width: 100%; overflow: auto; border-collapse: collapse; font-size: .94em; }
@@ -1241,6 +1242,22 @@ kbd {
 .footer-btn[hidden] { display: none; }
 
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(.85); } }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-3px); }
+  40%, 80% { transform: translateX(3px); }
+}
+.shake { animation: shake 0.28s ease-in-out; }
+.warn-border { border-color: var(--warn, #e5a50a) !important; }
+
+.action-success {
+  color: var(--gi) !important;
+  border-color: var(--gi) !important;
+}
+
+.spin svg, svg.spin {
+  animation: spin 0.75s linear infinite;
+}
 
 /* ---------- status ---------- */
 #status { height: 24px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 10px; background: var(--bg2); border-top: 1px solid var(--line); font: 11px var(--mono); color: var(--faint); user-select: none; white-space: nowrap; overflow: hidden; }
