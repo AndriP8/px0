@@ -883,12 +883,12 @@ func (m *agentManager) StartBatch(items []agentBatchItem, force bool) (*agentJob
 		m.jobs = map[int64]*agentJob{}
 	}
 	m.jobs[job.ID] = job
-	m.mu.Unlock()
-
 	modelStr := ""
 	if m.models != nil && m.models[name] != "" {
 		modelStr = fmt.Sprintf(" (%s)", m.models[name])
 	}
+	m.mu.Unlock()
+
 	if len(items) == 1 {
 		uiStatus("step", "agent", fmt.Sprintf("#%d %s%s · %s:%s  %q", job.ID, name, modelStr, items[0].Path, lineRef(items[0].L1, items[0].L2), items[0].Instruction), 0, os.Stdout)
 	} else {
@@ -937,12 +937,12 @@ func (m *agentManager) StartPrompt(label, prompt string) (*agentJob, error) {
 		m.jobs = map[int64]*agentJob{}
 	}
 	m.jobs[job.ID] = job
-	m.mu.Unlock()
-
 	modelStr := ""
 	if m.models != nil && m.models[name] != "" {
 		modelStr = fmt.Sprintf(" (%s)", m.models[name])
 	}
+	m.mu.Unlock()
+
 	uiStatus("step", "agent", fmt.Sprintf("#%d %s%s · %s", job.ID, name, modelStr, label), 0, os.Stdout)
 
 	go m.run(ctx, cancel, job, args, prompt)

@@ -189,9 +189,14 @@ func (ix *Index) Children(dir string) ([]Node, bool) {
 	ix.mu.RLock()
 	c, ok := ix.children[dir]
 	under := !ok && ix.underIgnoredLocked(dir)
+	var res []Node
+	if ok {
+		res = make([]Node, len(c))
+		copy(res, c)
+	}
 	ix.mu.RUnlock()
 	if ok || !under {
-		return c, ok
+		return res, ok
 	}
 	return ix.listIgnored(dir)
 }

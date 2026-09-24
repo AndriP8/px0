@@ -265,9 +265,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
 		gz := gzipPool.Get().(*gzip.Writer)
-		gz.Reset(rec)
+		gw := &gzipWriter{ResponseWriter: rec, w: gz}
 		defer func() { gz.Close(); gzipPool.Put(gz) }()
-		out = gzipWriter{ResponseWriter: rec, w: gz}
+		out = gw
 	}
 
 	s.mux.ServeHTTP(out, r)
@@ -283,10 +283,29 @@ type gzipWriter struct {
 	w *gzip.Writer
 }
 
-func (g gzipWriter) Write(b []byte) (int, error) { return g.w.Write(b) }
+func (g gzipWriter) WriteHeader(status int) {
+	g.Header().Del("Content-Length")
+	if status == http.StatusNotModified || status == http.StatusNoContent {
+		g.Header().Del("Content-Encoding")
+		if g.w != nil {
+			g.w.Reset(io.Discard)
+		}
+	}
+	g.ResponseWriter.WriteHeader(status)
+}
+
+func (g gzipWriter) Write(b []byte) (int, error) {
+	g.Header().Del("Content-Length")
+	if g.w != nil {
+		return g.w.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
+}
 
 func (g gzipWriter) Flush() {
-	_ = g.w.Flush()
+	if g.w != nil {
+		_ = g.w.Flush()
+	}
 	if flusher, ok := g.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -946,7 +965,7 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	includeMetrics := r.URL.Path != "/api/git/stream"
+	includeMetrics := r.URL.Path != s.routePath("/api/git/stream")
 
 	// 1. Immediately send initial metrics on connection (for unified stream)
 	if includeMetrics {

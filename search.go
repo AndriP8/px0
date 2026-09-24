@@ -36,6 +36,18 @@ const (
 // snip turns one raw line plus a byte range into a display-ready match,
 // dropping indentation and keeping the match itself in view.
 func snip(line []byte, from, to int) Match {
+	if from < 0 {
+		from = 0
+	}
+	if from > len(line) {
+		from = len(line)
+	}
+	if to < from {
+		to = from
+	}
+	if to > len(line) {
+		to = len(line)
+	}
 	pre, mid, post := string(line[:from]), string(line[from:to]), string(line[to:])
 
 	trimmed := strings.TrimLeft(pre, " \t")

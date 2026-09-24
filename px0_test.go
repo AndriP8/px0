@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -999,6 +1000,116 @@ func TestUISpinner(t *testing.T) {
 		t.Errorf("expected quiet mode to produce no output, got: %q", buf.String())
 	}
 }
+
+func TestGzipWriterBodilessResponsesAndContentLength(t *testing.T) {
+	rec := httptest.NewRecorder()
+	gz, _ := gzip.NewWriterLevel(rec, gzip.BestSpeed)
+	gw := &gzipWriter{ResponseWriter: rec, w: gz}
+
+	// 1. Test 304 Not Modified
+	gw.Header().Set("Content-Length", "1234")
+	gw.Header().Set("Content-Encoding", "gzip")
+	gw.WriteHeader(http.StatusNotModified)
+	gz.Close()
+
+	if rec.Header().Get("Content-Length") != "" {
+		t.Errorf("expected Content-Length to be deleted on 304, got: %q", rec.Header().Get("Content-Length"))
+	}
+	if rec.Header().Get("Content-Encoding") != "" {
+		t.Errorf("expected Content-Encoding to be deleted on 304, got: %q", rec.Header().Get("Content-Encoding"))
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected no body written on 304, got %d bytes: %q", rec.Body.Len(), rec.Body.String())
+	}
+
+	// 2. Test 200 with normal body
+	rec2 := httptest.NewRecorder()
+	gz2, _ := gzip.NewWriterLevel(rec2, gzip.BestSpeed)
+	gw2 := &gzipWriter{ResponseWriter: rec2, w: gz2}
+	gw2.Header().Set("Content-Length", "999")
+	gw2.Header().Set("Content-Encoding", "gzip")
+	gw2.WriteHeader(http.StatusOK)
+	gw2.Write([]byte("hello compressed world"))
+	gz2.Close()
+
+	if rec2.Header().Get("Content-Length") != "" {
+		t.Errorf("expected Content-Length to be stripped from compressed response, got: %q", rec2.Header().Get("Content-Length"))
+	}
+	if rec2.Header().Get("Content-Encoding") != "gzip" {
+		t.Errorf("expected Content-Encoding to be gzip on 200, got: %q", rec2.Header().Get("Content-Encoding"))
+	}
+	if rec2.Body.Len() == 0 {
+		t.Errorf("expected compressed body on 200")
+	}
+}
+
+func TestChildrenReturnsCopy(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644)
+	ix := NewIndex(dir)
+	ix.Build()
+
+	kids1, ok := ix.Children("")
+	if !ok || len(kids1) == 0 {
+		t.Fatalf("expected children at root")
+	}
+
+	// Mutating the returned slice must not mutate ix.children
+	kids1[0].Dirty = true
+	kids1[0].Status = "M"
+
+	kids2, _ := ix.Children("")
+	if kids2[0].Dirty != false || kids2[0].Status != "" {
+		t.Errorf("ix.Children did not return an isolated copy of node slice")
+	}
+}
+
+func TestLSPBoundsChecks(t *testing.T) {
+	c := &lspClient{encoding: "utf-32"}
+
+	// Test toLSP with negative column
+	pos := c.toLSP("hello", 1, -5)
+	if pos.Character != 0 {
+		t.Errorf("expected 0 for negative byteCol, got %d", pos.Character)
+	}
+
+	// Test fromLSP with negative character
+	lines := []string{"hello"}
+	line, col := c.fromLSP(lines, lspPosition{Line: 0, Character: -10})
+	if line != 1 || col != 0 {
+		t.Errorf("expected line 1 col 0 for negative character, got line %d col %d", line, col)
+	}
+}
+
+func TestSnipBoundsChecks(t *testing.T) {
+	// Negative from, out of bounds to, inverted range
+	m1 := snip([]byte("hello world"), -5, 100)
+	if m1.Mid != "hello world" {
+		t.Errorf("expected clamped mid 'hello world', got %q", m1.Mid)
+	}
+
+	m2 := snip([]byte("hello world"), 8, 3)
+	if m2.Mid != "" {
+		t.Errorf("expected empty mid for inverted range, got %q", m2.Mid)
+	}
+}
+
+func TestFuzzyCaseSensitivity(t *testing.T) {
+	files := []FileEntry{
+		{Path: "src/HTTPServer.go", Name: "HTTPServer.go", lower: "src/httpserver.go", nameStart: 4},
+		{Path: "src/httpserver.go", Name: "httpserver.go", lower: "src/httpserver.go", nameStart: 4},
+	}
+
+	// Uppercase query should rank exact-case match higher
+	res := FuzzyFind(files, "HTTPServer", 10)
+	if len(res) < 2 {
+		t.Fatalf("expected 2 results, got %d", len(res))
+	}
+	if res[0].Path != "src/HTTPServer.go" {
+		t.Errorf("expected 'src/HTTPServer.go' to rank higher for query 'HTTPServer', got: %s", res[0].Path)
+	}
+}
+
 
 
 
