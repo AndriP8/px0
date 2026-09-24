@@ -8,7 +8,7 @@ px0 is intentionally designed as a read-optimized viewer rather than a tradition
 
 In modern AI-native development workflows, developers spend less time typing repetitive syntax and more time reviewing, directing, and guiding intelligent agents. Traditional IDEs carry massive authoring baggage—gigabytes of Electron RAM, plugin conflicts, and heavy text manipulation engines.
 
-px0 decouples code viewing from code authoring. It provides a sub-millisecond, low-resource reading experience (~20 MB RSS) while seamlessly integrating with whichever CLI coding agent you already run on your machine (such as Claude Code, Gemini CLI, Cursor Agent, Antigravity, OpenCode, Codex, Aider, or Goose). You select the code, provide an instruction, and px0 coordinates the background execution, streams the progress to your terminal, and automatically refreshes modified files upon completion.
+px0 decouples code viewing from code authoring. It provides a sub-millisecond, low-resource reading experience (~20–30 MB RSS) while seamlessly integrating with whichever CLI coding agent you already run on your machine (such as Claude Code, Gemini CLI, Cursor Agent, Antigravity, OpenCode, Codex, Aider, or Goose). You select the code, provide an instruction, and px0 coordinates the background execution, streams the progress to your terminal, and automatically refreshes modified files upon completion.
 
 ---
 

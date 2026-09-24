@@ -1,6 +1,6 @@
 # px0 Features Guide
 
-px0 is an ultra-fast, zero-config code reader and navigator specifically optimized for fast reads, remote inspection, and AI-assisted workflows. It provides instant access to codebases of any size with minimal resource consumption (~20 MB RAM, < 1 ms startup).
+px0 is an ultra-fast, zero-config code reader and navigator specifically optimized for fast reads, remote inspection, and AI-assisted workflows. It provides instant access to codebases of any size with minimal resource consumption (~20–30 MB server RAM, ~100–180 MB total including the browser tab, < 1 ms startup).
 
 This directory provides comprehensive documentation for all px0 user-facing features, detailing how each capability works, its role in developer and AI agent pairing workflows, interactive controls, and configuration options.
 

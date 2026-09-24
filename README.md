@@ -11,7 +11,7 @@ px0 is the IDE for humans and AI, optimized for quick, fast code reviews. It tur
 As AI agents author more code directly from the terminal, engineering productivity is no longer constrained by how fast you type—it is constrained by how fast you can review, navigate, and verify changes. px0 replaces heavy, multi-gigabyte editing suites with an instant, distraction-free environment built specifically for this review loop.
 
 - < 1 ms cold start
-- ~20 MB resident RAM (vs. VS Code's ~1,440 MB)
+- ~20–30 MB server daemon RAM (~100–180 MB total with browser tab, vs. VS Code's ~1,440 MB)
 - Single static Go binary with zero runtime dependencies (no Electron, no Node, no CGO)
 - ~280 languages tokenized natively via Chroma
 
@@ -100,6 +100,8 @@ make build
 # Profile memory lifecycle (index, search, idle memory release)
 ./benchmark.sh --memory bench-repos/linux
 ```
+
+> **Architecture & Memory Accounting**: px0 separates the lightweight native Go daemon from the browser-rendered UI. The Go server consumes ~20–30 MB resident RAM (RSS). The active browser tab allocates ~80–150 MB for DOM nodes, V8 JS runtime, and GPU compositing. Combined, the total local memory footprint is ~100–180 MB (~85–90% lighter than Electron IDEs like VS Code at ~1,440 MB, which bundle dedicated Chromium and Node runtimes). In remote or container environments (`px0 -host 0.0.0.0`), the remote host pays strictly the ~20–30 MB server cost. See [BENCHMARKS.md](BENCHMARKS.md) for full methodology and breakdowns.
 
 ## Documentation
 

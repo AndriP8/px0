@@ -102,7 +102,7 @@ When hosted behind reverse proxies or multi-tenant review platforms, px0 support
 
 Even though Go's garbage collector frees unreferenced heap objects rapidly, the Go runtime does not immediately release physical memory pages back to the host operating system. In high-churn CLI sessions (such as searching a 50,000-file repository), the process resident set size (RSS) could appear inflated long after the search completes.
 
-To maintain a lean footprint (~20 MB RSS), `server.go` implements an automatic scavenger:
+To maintain a lean footprint (~20–30 MB RSS), `server.go` implements an automatic scavenger:
 
 ```go
 func (s *Server) scavenge() {
@@ -130,6 +130,13 @@ func (s *Server) scavenge() {
 - `s.lastReq`: An atomic 64-bit integer tracks the Unix timestamp (in nanoseconds) of the most recent incoming HTTP request.
 - When no HTTP traffic has arrived for 15 seconds after an active period, `debug.FreeOSMemory()` is invoked.
 - Physical memory pages freed by the GC are surrendered back to the operating system kernel immediately, preventing background memory bloat.
+
+### Client-Server Memory Split & Total Footprint
+
+Because px0 uses a client-server architecture rather than embedding Electron:
+- **Host Server**: The Go backend daemon occupies ~20–30 MB RSS, handling indexing, symbol discovery, regex search, and git operations.
+- **Client Browser Tab**: The frontend web client runs in the user's existing browser, allocating ~80–150 MB for the DOM, V8 runtime, and GPU compositing. Memory is kept strictly bounded because px0's bespoke virtualized scroller mounts only ~60 active rows regardless of file size.
+- **Combined Impact**: Total system footprint is ~100–180 MB (~85–90% lower than the ~1,400 MB footprint of desktop Electron IDEs). On remote devboxes and containers, the host pays strictly the ~20–30 MB server cost.
 
 ### Gzip Buffer Pooling
 
