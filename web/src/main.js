@@ -108,7 +108,7 @@ initLineComment();
     if (hasGitChanges) {
       await setSidebarMode('git');
     } else {
-      setSidebarMode('files');
+      await setSidebarMode('files');
     }
     return hasGitChanges;
   };

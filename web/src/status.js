@@ -132,11 +132,11 @@ function renderMetricsMenu(m) {
     <div class="metrics-grid">
       <div class="metrics-row">
         <span class="metrics-label">Resident RAM (RSS)</span>
-        <span class="metrics-val">${fmtBytes(m.rssBytes)}</span>
+        <span class="metrics-val">${fmtBytes(m.rssBytes || 0)}</span>
       </div>
       <div class="metrics-row">
         <span class="metrics-label">CPU Usage</span>
-        <span class="metrics-val">${m.cpuUsage.toFixed(1)}%</span>
+        <span class="metrics-val">${(m.cpuUsage != null ? m.cpuUsage : 0).toFixed(1)}%</span>
       </div>
       <div class="metrics-row">
         <span class="metrics-label">Active Goroutines</span>
@@ -176,8 +176,8 @@ export function updateMetricsDisplay(m) {
   lastMetrics = m;
   const cpuEl = $('#st-cpu');
   const ramEl = $('#st-ram');
-  if (cpuEl) cpuEl.textContent = `${m.cpuUsage.toFixed(1)}%`;
-  if (ramEl) ramEl.textContent = fmtBytes(m.rssBytes);
+  if (cpuEl) cpuEl.textContent = `${(m.cpuUsage != null ? m.cpuUsage : 0).toFixed(1)}%`;
+  if (ramEl) ramEl.textContent = fmtBytes(m.rssBytes || 0);
   const lspWrap = $('#st-lspmem-wrap');
   const lspEl = $('#st-lspmem');
   if (lspWrap) lspWrap.hidden = !m.lspEnabled;

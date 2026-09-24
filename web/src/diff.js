@@ -124,7 +124,9 @@ function renderDiff(d) {
   diffContent.replaceChildren();
   const frag = document.createDocumentFragment();
   if (S.meta?.pr && d.prDiffHunks !== undefined) {
-    if (!d.prDiffHunks.length && !d.yourDiffHunks.length) {
+    const prHunks = d.prDiffHunks || [];
+    const yourHunks = d.yourDiffHunks || [];
+    if (!prHunks.length && !yourHunks.length) {
       const p = document.createElement('div');
       p.className = 'diff-empty';
       p.textContent = 'No changes.';
@@ -132,14 +134,14 @@ function renderDiff(d) {
       return;
     }
     frag.append(createDiffSection(d, 'pr', 'PR changes', 'from ' + (S.meta.pr.base || 'base'), (body) => {
-      if (!d.prDiffHunks.length) body.append(sectionNote('The PR itself makes no change to this file.'));
-      else appendHunks(body, d.prDiffHunks, d.diffMode, true);
+      if (!prHunks.length) body.append(sectionNote('The PR itself makes no change to this file.'));
+      else appendHunks(body, prHunks, d.diffMode, true);
     }));
 
     const since = S.meta.pr.headSHA ? 'since ' + S.meta.pr.headSHA.slice(0, 7) : 'since checkout';
     frag.append(createDiffSection(d, 'you', 'Your changes', since, (body) => {
-      if (!d.yourDiffHunks.length) body.append(sectionNote('Nothing edited or committed yet — changes you make will show up here.'));
-      else appendHunks(body, d.yourDiffHunks, d.diffMode, false);
+      if (!yourHunks.length) body.append(sectionNote('Nothing edited or committed yet — changes you make will show up here.'));
+      else appendHunks(body, yourHunks, d.diffMode, false);
     }));
   } else {
     if (!d.diffHunks || !d.diffHunks.length) {
@@ -430,9 +432,7 @@ export function initDiff() {
   });
   $('#diff-btn')?.addEventListener('click', e => {
     e.stopPropagation();
-    const d = doc_();
-    if (!d || !d.diffAvailable) return;
-    setDiffMode(d.diffMode || layoutPref());
+    toggleDiff();
   });
   const menu = $('#diff-menu');
   if (menu) {

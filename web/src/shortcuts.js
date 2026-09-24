@@ -6,7 +6,7 @@ import { updateStatus } from './status.js';
 import { closeTab, switchTab, reopenClosedTab } from './tabs.js';
 import { go } from './history.js';
 import { clearLink, hovercard } from './hover.js';
-import { openFind, clearFind, findbar } from './find.js';
+import { openFind, clearFind, findbar, findNextMatch } from './find.js';
 import { gotoDefinition, findReferences } from './lsp.js';
 import { showRightInspector, hideRightInspector } from './inspector.js';
 import { overlay, openPalette, closePalette } from './palette.js';
@@ -102,7 +102,7 @@ export function initShortcuts() {
       const lb = $('#img-lightbox');
       if (lb && !lb.hidden) { lb.hidden = true; return; }
       if (!$('#vim-helpsheet')?.hidden) { closeVimHelp(); return; }
-      if (isVimEnabled() && getVimMode() !== 'NORMAL' && handleVimKeyDown(e)) return;
+      if (isVimEnabled() && handleVimKeyDown(e)) return;
       if (isSettingsOpen()) { closeSettings(); return; }
       if (!overlay.hidden) { closePalette(); return; }
       if (!$('#helpsheet').hidden) { $('#helpsheet').hidden = true; return; }
@@ -188,6 +188,12 @@ export function initShortcuts() {
         submitBatch();
         return;
       }
+    }
+
+    if (!mod && e.key === 'Enter' && !findbar.hidden) {
+      e.preventDefault();
+      findNextMatch(e.shiftKey ? -1 : 1);
+      return;
     }
 
     if (inField(document.activeElement)) return;

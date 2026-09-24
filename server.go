@@ -265,6 +265,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
 		gz := gzipPool.Get().(*gzip.Writer)
+		gz.Reset(rec)
 		gw := &gzipWriter{ResponseWriter: rec, w: gz}
 		defer func() { gz.Close(); gzipPool.Put(gz) }()
 		out = gw
@@ -1135,26 +1136,29 @@ func (s *Server) handleGitCommitMessage(w http.ResponseWriter, r *http.Request) 
 	if !s.agentOrFail(w) {
 		return
 	}
-	diff := gitStagedDiff(s.ix.Root())
-	if strings.TrimSpace(diff) == "" {
+	root := s.ix.Root()
+	files := gitStagedFiles(root)
+	if len(files) == 0 {
 		// Auto-stage all uncommitted changes if nothing is staged
-		if gitHasUncommittedChanges(s.ix.Root()) {
-			_ = gitStage(s.ix.Root(), ".")
-			diff = gitStagedDiff(s.ix.Root())
+		if gitHasUncommittedChanges(root) {
+			_ = gitStage(root, ".")
+			files = gitStagedFiles(root)
 			if s.gitWatcher != nil {
 				s.gitWatcher.Trigger()
 			}
 		}
 	}
-	if strings.TrimSpace(diff) == "" {
+	if len(files) == 0 {
 		fail(w, http.StatusBadRequest, "nothing staged to generate a message for")
 		return
 	}
+	stat := gitStagedStat(root)
+	diff := gitStagedDiff(root)
 	instruction := ""
 	if cfg := readSettings(); cfg.GitCommitMessageInstruction != nil {
 		instruction = strings.TrimSpace(*cfg.GitCommitMessageInstruction)
 	}
-	job, err := s.agent.StartPrompt("commit message", commitMessagePrompt(diff, instruction))
+	job, err := s.agent.StartPrompt("commit message", commitMessagePrompt(files, stat, diff, instruction))
 	if err != nil {
 		code := http.StatusBadGateway
 		if errors.Is(err, errAgentNone) {

@@ -179,6 +179,7 @@ function mdSetImage(img, src, base) {
   } else if (src.startsWith('//')) {
     img.setAttribute('src', src);
     img.dataset.origSrc = src;
+  } else if (src) {
     const t = mdLocal(src, base);
     if (t) {
       const rawUrl = new URL('api/raw?path=' + encodeURIComponent(t.path), document.baseURI || location.href).href;
@@ -422,7 +423,11 @@ export function initMarkdown() {
 
   mdArticle.addEventListener('click', e => {
     const copy = e.target.closest('.md-copy');
-    if (copy) { copyToClipboard($('pre', copy.parentElement).textContent, 'Copied code block'); return; }
+    if (copy) {
+      const pre = $('pre', copy.parentElement);
+      if (pre) copyToClipboard(pre.textContent || '', 'Copied code block');
+      return;
+    }
 
     // Standalone image click opens interactive lightbox
     const img = e.target.closest('img.md-zoomable');

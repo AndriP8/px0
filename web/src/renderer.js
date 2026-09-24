@@ -110,6 +110,7 @@ export function placeCaret() {
   const row = d && rowFor(d.cur);
   if (!row) { el.hidden = true; return null; }
   const code = $('.c', row);
+  if (!code) { el.hidden = true; return null; }
   const col = Math.max(0, Math.min(d.col || 0, code.textContent.length));
   const [node, off] = toPoint({ line: d.cur, col });
   const base = sizer.getBoundingClientRect();
@@ -187,6 +188,7 @@ export function toPoint({ line, col }) {
   const row = rowFor(line);
   if (!row) return null;
   const code = $('.c', row);
+  if (!code) return null;
   const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
   let at = 0;
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {

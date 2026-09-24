@@ -1,5 +1,15 @@
 // web/src/state.js
+/**
+ * @param {string} s
+ * @param {ParentNode} [r=document]
+ * @returns {any}
+ */
 export const $ = (s, r = document) => r.querySelector(s);
+/**
+ * @param {string} s
+ * @param {ParentNode} [r=document]
+ * @returns {any[]}
+ */
 export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 export const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 

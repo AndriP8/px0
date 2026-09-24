@@ -23,7 +23,7 @@ export async function reindexWorkspace() {
     if (hasGitChanges) {
       await setSidebarMode('git');
     } else {
-      setSidebarMode('files');
+      await setSidebarMode('files');
     }
     await refreshTree();
     await reloadOpenTabs();

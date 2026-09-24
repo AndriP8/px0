@@ -1210,10 +1210,10 @@ func agentBatchPrompt(items []itemWithSnippet) string {
 }
 
 // commitMessagePrompt asks the harness to write a commit message for the
-// currently staged diff. instruction is the user's
-// git.commitMessageInstruction setting (empty when unset), appended verbatim
-// so it can refine or override the base convention below.
-func commitMessagePrompt(diff, instruction string) string {
+// staged changes. instruction is the user's git.commitMessageInstruction
+// setting (empty when unset), appended verbatim so it can refine or override
+// the base convention below.
+func commitMessagePrompt(files []string, stat, diff, instruction string) string {
 	var b strings.Builder
 	b.WriteString("Write a git commit message for the staged changes below.\n")
 	b.WriteString("Rules: imperative mood, a concise summary line under 72 characters, a blank line before an optional body, and explain why rather than just what changed.\n")
@@ -1221,8 +1221,27 @@ func commitMessagePrompt(diff, instruction string) string {
 	if instruction != "" {
 		fmt.Fprintf(&b, "\nAdditional instructions from the user: %s\n", instruction)
 	}
-	b.WriteString("\nStaged diff:\n")
-	b.WriteString(diff)
+	if len(files) > 0 {
+		fmt.Fprintf(&b, "\nChanged files (%d):\n", len(files))
+		maxFiles := 100
+		for i, f := range files {
+			if i >= maxFiles {
+				fmt.Fprintf(&b, "... and %d more files\n", len(files)-maxFiles)
+				break
+			}
+			fmt.Fprintf(&b, "- %s\n", f)
+		}
+	}
+	if strings.TrimSpace(stat) != "" {
+		b.WriteString("\nSummary of changes (diffstat):\n")
+		b.WriteString(stat)
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(diff) != "" {
+		b.WriteString("\nStaged diff:\n")
+		b.WriteString(diff)
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

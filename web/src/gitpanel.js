@@ -4,7 +4,7 @@
 // review session (S.meta.pr set), Push/Pull target the PR's actual head
 // branch instead of the checkout's own remote -- see pr.go's Push/Pull.
 import { $, esc, S, api, apiPostJson } from './state.js';
-import { showToast } from './ui.js';
+import { showToast, copyToClipboard } from './ui.js';
 import { reindexWorkspace } from './panels.js';
 import { refreshPRMeta } from './pr.js';
 import { openSettings } from './settings.js';
@@ -364,7 +364,7 @@ async function handleSeeAllCommits(e) {
   try {
     const res = await api('/api/git/log?limit=50');
     if (res?.commits) {
-      renderRecentCommits(res.commits);
+      renderRecentCommits(res.commits, 0);
       const link = $('#git-see-all-commits');
       if (link) link.hidden = true;
     }
@@ -373,14 +373,15 @@ async function handleSeeAllCommits(e) {
   }
 }
 
-function renderRecentCommits(commits) {
+function renderRecentCommits(commits, max = 5) {
   const list = $('#git-commits-list');
   if (!list) return;
   if (!commits || commits.length === 0) {
     list.innerHTML = '<div class="git-commits-empty">No commits yet</div>';
     return;
   }
-  list.innerHTML = commits.slice(0, 5).map(c => `
+  const slice = max ? commits.slice(0, max) : commits;
+  list.innerHTML = slice.map(c => `
     <div class="git-commit-row" data-hash="${esc(c.hash)}" title="${esc(c.hash)}: ${esc(c.subject || '')} (${esc(c.author || '')}, ${esc(c.date || '')}) - Click to copy SHA">
       <svg class="git-commit-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="8" r="2.8"/><line x1="8" y1="1" x2="8" y2="5.2"/><line x1="8" y1="10.8" x2="8" y2="15"/></svg>
       <span class="git-commit-msg-text">${esc(c.subject || '(no message)')}</span>
@@ -388,15 +389,10 @@ function renderRecentCommits(commits) {
   `).join('');
 
   list.querySelectorAll('.git-commit-row').forEach(row => {
-    row.addEventListener('click', async () => {
+    row.addEventListener('click', () => {
       const h = row.dataset.hash;
       if (h) {
-        try {
-          await navigator.clipboard.writeText(h);
-          showToast('✓', 'Copied ' + h);
-        } catch {
-          showToast('!', h);
-        }
+        copyToClipboard(h, 'Copied ' + h);
       }
     });
   });

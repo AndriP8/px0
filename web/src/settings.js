@@ -1,5 +1,5 @@
 // web/src/settings.js
-import { $, $$, esc, S, api, apiPost } from './state.js';
+import { $, $$, esc, S, api, apiPost, apiPostJson } from './state.js';
 import { showToast } from './ui.js';
 import { applyEditorTypography, toggleWordWrap, toggleLineNumbers } from './renderer.js';
 import { setTheme, listThemes } from './theme.js';
@@ -804,7 +804,7 @@ async function handleSettingChange(key, value) {
   // Persist to server
   try {
     setSaveStatus('saving');
-    const res = await apiPost('/api/settings', { [key]: value });
+    const res = await apiPostJson('/api/settings', { [key]: value });
     if (res.raw) settingsData.raw = res.raw;
     setSaveStatus('saved', 'All changes saved');
   } catch (err) {
@@ -849,7 +849,7 @@ async function handleExplicitSave() {
       ? { ...pendingSettingsChanges }
       : { ...(settingsData.settings || {}) };
 
-    const res = await apiPost('/api/settings', toSave);
+    const res = await apiPostJson('/api/settings', toSave);
     if (res.settings) {
       settingsData.settings = res.settings;
       S.settings = res.settings;
@@ -887,7 +887,7 @@ async function handleSaveRawSettings() {
 
   setSaveStatus('saving');
   try {
-    const res = await apiPost('/api/settings', { raw: rawText });
+    const res = await apiPostJson('/api/settings', { raw: rawText });
     if (res.settings) {
       settingsData.settings = res.settings;
       S.settings = res.settings;

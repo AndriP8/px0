@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net/url"
@@ -237,16 +238,85 @@ func gitStagedPaths(root string) map[string]bool {
 	return staged
 }
 
+// gitStagedFiles returns a list of repo-relative paths staged in the index.
+func gitStagedFiles(root string) []string {
+	info := gitProbe(root)
+	if !info.ok {
+		return nil
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--name-only", "--cached", "-z").Output()
+	if err != nil {
+		return nil
+	}
+	key := repoRelKey(info, root)
+	var files []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p == "" {
+			continue
+		}
+		if k, ok := key(p); ok {
+			files = append(files, k)
+		}
+	}
+	return files
+}
+
+// gitStagedStat returns the diffstat summary of staged changes against HEAD.
+// Fails quiet -> "".
+func gitStagedStat(root string) string {
+	if !gitAvailable(root) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--stat", "--cached").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+const (
+	maxStagedDiffBytes = 32 * 1024 // 32 KB limit on staged diff to stay safely under ARG_MAX / MAX_ARG_STRLEN
+)
+
+var lockfileExclusions = []string{
+	":(exclude)*package-lock.json",
+	":(exclude)*yarn.lock",
+	":(exclude)*pnpm-lock.yaml",
+	":(exclude)*go.sum",
+	":(exclude)*Cargo.lock",
+	":(exclude)*composer.lock",
+	":(exclude)*poetry.lock",
+	":(exclude)*Gemfile.lock",
+	":(exclude)*.min.js",
+	":(exclude)*.min.css",
+	":(exclude)*.map",
+}
+
 // gitStagedDiff returns the unified diff of the index (staged changes)
 // against HEAD, for handing to a coding harness asked to write a commit
-// message. Fails quiet -> "".
+// message. Large diffs are capped to maxStagedDiffBytes and noise files
+// (lockfiles, minified assets) are excluded when other changes exist.
+// Fails quiet -> "".
 func gitStagedDiff(root string) string {
 	if !gitAvailable(root) {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", root, "diff", "--no-color", "--cached").Output()
-	if err != nil {
-		return ""
+	// Try fetching the diff excluding high-noise files (lockfiles, minified bundles)
+	cmdArgs := append([]string{"-C", root, "diff", "--no-color", "--cached", "--", "."}, lockfileExclusions...)
+	out, err := exec.Command("git", cmdArgs...).Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		// Fallback to unfiltered diff if excluded diff was empty or failed (e.g. only lockfiles were modified)
+		out, err = exec.Command("git", "-C", root, "diff", "--no-color", "--cached").Output()
+		if err != nil {
+			return ""
+		}
+	}
+	if len(out) > maxStagedDiffBytes {
+		cut := maxStagedDiffBytes
+		if idx := bytes.LastIndexByte(out[:cut], '\n'); idx > 0 {
+			cut = idx
+		}
+		return string(out[:cut]) + "\n\n[Diff truncated: showing first 32KB. See changed files and summary above for full list of changes]"
 	}
 	return string(out)
 }

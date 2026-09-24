@@ -44,9 +44,9 @@ export function renderImageView(d) {
   if (d.imagePanX === undefined) d.imagePanX = 0;
   if (d.imagePanY === undefined) d.imagePanY = 0;
   if (d.imageBg === undefined) d.imageBg = 'checker';
-  if (d.imagePixelated === undefined) {
+  if (d.imagePixelated === undefined && d.imageMeta) {
     // Default tiny icons (<= 64px) to pixelated; others to smooth
-    d.imagePixelated = d.imageMeta ? (d.imageMeta.width <= 64 && d.imageMeta.height <= 64) : false;
+    d.imagePixelated = d.imageMeta.width <= 64 && d.imageMeta.height <= 64;
   }
 
   const onLoaded = () => {

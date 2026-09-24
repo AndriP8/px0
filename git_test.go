@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1096,3 +1097,94 @@ func TestPRReviewerChangesInIndex(t *testing.T) {
 		t.Errorf("expected node YourStatus to be cleared after revert, got %q", kids2[0].YourStatus)
 	}
 }
+
+func TestGitStagedFilesStatAndDiff(t *testing.T) {
+	if !gitInstalled() {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	gitTestRun(t, dir, "init", "-b", "main")
+	for _, cfg := range [][2]string{{"user.email", "t@example.com"}, {"user.name", "T"}, {"commit.gpgsign", "false"}} {
+		gitTestRun(t, dir, "config", cfg[0], cfg[1])
+	}
+	// Initial commit
+	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init\n"), 0o644)
+	gitTestRun(t, dir, "add", "init.txt")
+	gitTestRun(t, dir, "commit", "-m", "init")
+
+	// Stage a code file and a lockfile
+	os.WriteFile(filepath.Join(dir, "app.go"), []byte("package main\n\nfunc main() {}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte("{\n  \"name\": \"dummy-lockfile\",\n  \"version\": \"1.0.0\"\n}\n"), 0o644)
+	gitTestRun(t, dir, "add", "app.go", "package-lock.json")
+
+	files := gitStagedFiles(dir)
+	if len(files) != 2 {
+		t.Fatalf("expected 2 staged files, got %d: %v", len(files), files)
+	}
+	hasApp := false
+	hasLock := false
+	for _, f := range files {
+		if f == "app.go" {
+			hasApp = true
+		}
+		if f == "package-lock.json" {
+			hasLock = true
+		}
+	}
+	if !hasApp || !hasLock {
+		t.Fatalf("staged files missing expected entries: %v", files)
+	}
+
+	stat := gitStagedStat(dir)
+	if !strings.Contains(stat, "app.go") || !strings.Contains(stat, "package-lock.json") {
+		t.Fatalf("diffstat missing expected files:\n%s", stat)
+	}
+
+	// Staged diff should exclude package-lock.json because app.go has changes
+	diff := gitStagedDiff(dir)
+	if !strings.Contains(diff, "app.go") {
+		t.Fatalf("diff expected to contain app.go diff:\n%s", diff)
+	}
+	if strings.Contains(diff, "package-lock.json") {
+		t.Fatalf("diff expected to exclude package-lock.json when other changes exist:\n%s", diff)
+	}
+
+	// Commit app.go, leaving only package-lock.json staged: should fall back to showing package-lock.json
+	gitTestRun(t, dir, "commit", "-m", "commit app.go", "app.go")
+	diffOnlyLock := gitStagedDiff(dir)
+	if !strings.Contains(diffOnlyLock, "package-lock.json") {
+		t.Fatalf("diff expected to fallback to package-lock.json when only lockfiles staged:\n%s", diffOnlyLock)
+	}
+}
+
+func TestGitStagedDiffTruncation(t *testing.T) {
+	if !gitInstalled() {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	gitTestRun(t, dir, "init", "-b", "main")
+	for _, cfg := range [][2]string{{"user.email", "t@example.com"}, {"user.name", "T"}, {"commit.gpgsign", "false"}} {
+		gitTestRun(t, dir, "config", cfg[0], cfg[1])
+	}
+	os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init\n"), 0o644)
+	gitTestRun(t, dir, "add", "init.txt")
+	gitTestRun(t, dir, "commit", "-m", "init")
+
+	// Write a 50 KB file (> 32 KB limit)
+	var large bytes.Buffer
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&large, "line %04d: lots of content to make the diff exceed the 32KB cap\n", i)
+	}
+	os.WriteFile(filepath.Join(dir, "large.txt"), large.Bytes(), 0o644)
+	gitTestRun(t, dir, "add", "large.txt")
+
+	diff := gitStagedDiff(dir)
+	if !strings.Contains(diff, "[Diff truncated: showing first 32KB") {
+		t.Fatalf("expected diff to be truncated with notice, got %d bytes without notice", len(diff))
+	}
+	// The diff output should be around 32KB + truncation message
+	if len(diff) > 34*1024 {
+		t.Fatalf("diff size %d exceeded expected bound", len(diff))
+	}
+}
+

@@ -1043,6 +1043,36 @@ func TestGzipWriterBodilessResponsesAndContentLength(t *testing.T) {
 	}
 }
 
+func TestServerServeHTTPGzip(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	s.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Errorf("expected gzip Content-Encoding, got %q", rec.Header().Get("Content-Encoding"))
+	}
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatalf("failed to create gzip reader on response body: %v (len=%d)", err, rec.Body.Len())
+	}
+	defer zr.Close()
+	body, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("failed to read decompressed body: %v", err)
+	}
+	if len(body) == 0 {
+		t.Errorf("expected non-empty decompressed body, got 0 bytes")
+	}
+	if !strings.Contains(string(body), "<!doctype html>") {
+		t.Errorf("expected html content in body")
+	}
+}
+
 func TestChildrenReturnsCopy(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644)

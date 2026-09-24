@@ -28,7 +28,9 @@ export function initPR() {
   meta = S.meta.pr;
   document.body.classList.add('pr-mode');
 
-  SEL_MENU_ITEMS.push({ sel: 'review-comment', label: 'Add Review Comment', keys: 'Alt+R' });
+  if (!SEL_MENU_ITEMS.some(item => item.sel === 'review-comment')) {
+    SEL_MENU_ITEMS.push({ sel: 'review-comment', label: 'Add Review Comment', keys: 'Alt+R' });
+  }
   setReviewHandler(openCommentComposer);
   setPRSyncHandler(renderMarkersForActiveDoc);
   injectFooterButton();

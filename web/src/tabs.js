@@ -1,5 +1,5 @@
 // web/src/tabs.js
-import { $, esc, S, doc_, api, apiPost, LH, CHUNK, withKeys } from './state.js';
+import { $, esc, S, doc_, api, apiPost, apiPostJson, LH, CHUNK, withKeys } from './state.js';
 import { emit } from './bus.js';
 import { vp, sizer, rowsEl, editor } from './ui.js';
 import { render, layout, refineChunk } from './renderer.js';
@@ -376,7 +376,7 @@ export function saveWorkspaceState() {
   saveSessionTimer = setTimeout(async () => {
     try {
       const tabs = S.tabs.map(t => ({ path: t.path }));
-      await apiPost('/api/session', { tabs, active: S.active });
+      await apiPostJson('/api/session', { tabs, active: S.active });
     } catch {}
   }, 200);
 }

@@ -22,7 +22,7 @@ function persistOpenDirs() {
   if (saveDirsTimer) clearTimeout(saveDirsTimer);
   saveDirsTimer = setTimeout(async () => {
     try {
-      await apiPost('/api/session', { openDirs: Array.from(openDirs) });
+      await apiPostJson('/api/session', { openDirs: Array.from(openDirs) });
     } catch {}
   }, 300);
 }
@@ -422,8 +422,8 @@ export function initTree() {
     await setSidebarMode('git');
   });
 
-  $('#btn-files')?.addEventListener('click', () => {
-    setSidebarMode('files');
+  $('#btn-files')?.addEventListener('click', async () => {
+    await setSidebarMode('files');
   });
 
   treeEl.addEventListener('click', async e => {
@@ -448,12 +448,20 @@ export function initTree() {
       setExpandBusy(false);
       const path = dirRow.dataset.dir;
       const kids = treeEl.querySelector('[data-kids="' + CSS.escape(path) + '"]');
+      if (!kids) return;
       const open = dirRow.classList.toggle('open');
       kids.classList.toggle('open', open);
       if (open) {
         openDirs.add(path);
-        kids.dataset.loaded = '1';
-        await drawTree(path, kids, path.split('/').length);
+        if (!kids.dataset.loaded) {
+          const loaded = await drawTree(path, kids, path.split('/').length);
+          if (loaded) kids.dataset.loaded = '1';
+          else {
+            dirRow.classList.remove('open');
+            kids.classList.remove('open');
+            openDirs.delete(path);
+          }
+        }
       } else openDirs.delete(path);
       persistOpenDirs();
       return;
