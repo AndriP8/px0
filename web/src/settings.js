@@ -1,5 +1,6 @@
 // web/src/settings.js
 import { $, $$, esc, S, api, apiPost } from './state.js';
+import { showToast } from './ui.js';
 import { applyEditorTypography, toggleWordWrap, toggleLineNumbers } from './renderer.js';
 import { setTheme, listThemes } from './theme.js';
 import { setLayoutPref } from './diff.js';
@@ -541,7 +542,7 @@ function isSettingModified(key, val, defVal) {
   if (val === undefined || val === null) return false;
   if (defVal === undefined || defVal === null) return val !== '';
   if (typeof defVal === 'number') {
-    return parseFloat(val) !== parseFloat(defVal);
+    return Number(val) !== Number(defVal);
   }
   if (typeof defVal === 'boolean') {
     return Boolean(val) !== Boolean(defVal);
@@ -825,11 +826,11 @@ async function handleExplicitSave() {
   }
 
   // Capture value of currently focused input/textarea inside settings list if any
-  const activeEl = document.activeElement;
+  const activeEl = /** @type {HTMLInputElement|HTMLTextAreaElement|null} */ (document.activeElement);
   if (activeEl && activeEl.dataset?.key && activeEl.closest('#settings-list')) {
     const key = activeEl.dataset.key;
-    let val = activeEl.value;
-    if (activeEl.type === 'checkbox') val = activeEl.checked;
+    let val = /** @type {any} */ (activeEl.value);
+    if (activeEl instanceof HTMLInputElement && activeEl.type === 'checkbox') val = activeEl.checked;
     else if (activeEl.type === 'number') val = parseFloat(val);
     pendingSettingsChanges[key] = val;
   }

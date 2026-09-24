@@ -1,5 +1,5 @@
 // web/src/inspector.js
-import { $, $$, esc, doc_, api } from './state.js';
+import { $, $$, esc, S, doc_, api } from './state.js';
 import { layout, render } from './renderer.js';
 import { updateStatus, setStatusNote } from './status.js';
 import { openFile, centerLine } from './tabs.js';

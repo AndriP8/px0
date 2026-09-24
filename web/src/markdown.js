@@ -1,5 +1,6 @@
 // web/src/markdown.js
-import { $, $$, S, doc_, api, isMac, MOD, LH } from './state.js';
+import { $, $$, S, doc_, esc, api, isMac, MOD, LH } from './state.js';
+import { on } from './bus.js';
 import { vp, rowsEl, copyToClipboard, showToast } from './ui.js';
 import { render, paint, rowFor, markNodes } from './renderer.js';
 import { openFile } from './tabs.js';
@@ -144,7 +145,7 @@ function mdSanitize(html, docPath) {
         c === 'md-code' || c.startsWith('footnote') || (tag === 'i' && MD_TOKENS.has(c)));
       if (keep.length) el.className = keep.join(' ');
     }
-    if (tag === 'input') el.disabled = true;
+    if (tag === 'input') /** @type {HTMLInputElement} */ (el).disabled = true;
     if (tag === 'img') mdSetImage(el, mdURL(attrs.src || ''), base);
     if (tag === 'a' && attrs.href) mdSetLink(el, mdURL(attrs.href), base);
   }
@@ -343,8 +344,8 @@ function mdJump(anchor) {
   if (!d || !el) return;
   pushHistory(d.path, previewTopLine());
   mdScrollTo(el);
-  const block = el.closest('[data-line]');
-  if (block) pushHistory(d.path, +block.dataset.line);
+  const block = /** @type {HTMLElement|null} */ (el.closest('[data-line]'));
+  if (block && block.dataset.line) pushHistory(d.path, +block.dataset.line);
 }
 
 /* ---------- keys, select all, find ---------- */
@@ -459,6 +460,8 @@ export function initMarkdown() {
       }
     });
   }
+  on('tab:activated', () => syncPreview());
+  on('tabs:cleared', () => syncPreview());
 }
 
 export function openLightbox(img) {

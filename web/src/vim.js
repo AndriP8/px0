@@ -1,5 +1,5 @@
 // web/src/vim.js
-import { $, esc, S, doc_, keyCaps } from './state.js';
+import { $, esc, S, doc_, keyCaps, LH } from './state.js';
 import { vp, sizer, copyToClipboard, showToast } from './ui.js';
 import { render, paint, rowFor, placeCaret } from './renderer.js';
 import { moveCursor, moveCol, moveWord, caretToEdge, updateDomSelection, clearSelection, revealCaretX } from './cursor.js';
@@ -190,7 +190,7 @@ function ensureLineSelection() {
 export function handleVimKeyDown(e) {
   if (!vimEnabled) return false;
 
-  const active = document.activeElement;
+  const active = /** @type {HTMLElement|null} */ (document.activeElement);
   if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
     return false;
   }
@@ -685,7 +685,7 @@ export function showVimHelp() {
             <div class="vim-sec-title">${esc(sec.title)}</div>
             <dl class="help-grid vim-help-grid">
               ${sec.items.map(([combos, v]) => `
-                <dt>${combos.map(keyCaps).filter(Boolean).join('<span class="key-or">/</span>')}</dt>
+                <dt>${(Array.isArray(combos) ? combos : [combos]).map(keyCaps).filter(Boolean).join('<span class="key-or">/</span>')}</dt>
                 <dd>${esc(v)}</dd>
               `).join('')}
             </dl>

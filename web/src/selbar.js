@@ -1,5 +1,6 @@
 // web/src/selbar.js
 import { $, S, doc_, keyLabel } from './state.js';
+import { on } from './bus.js';
 import { vp, copyToClipboard, showToast } from './ui.js';
 import { render } from './renderer.js';
 import { findReferences } from './lsp.js';
@@ -51,13 +52,11 @@ export function getSelectedRangeInfo() {
   const text = sel.toString().trim();
   if (!text) return null;
 
-  let startEl = range.startContainer;
-  if (startEl.nodeType !== 1) startEl = startEl.parentElement;
-  let endEl = range.endContainer;
-  if (endEl.nodeType !== 1) endEl = endEl.parentElement;
+  const startEl = /** @type {HTMLElement|null} */ (range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement);
+  const endEl = /** @type {HTMLElement|null} */ (range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentElement);
 
-  const startRow = startEl ? startEl.closest('.row') : null;
-  const endRow = endEl ? endEl.closest('.row') : null;
+  const startRow = /** @type {HTMLElement|null} */ (startEl ? startEl.closest('.row') : null);
+  const endRow = /** @type {HTMLElement|null} */ (endEl ? endEl.closest('.row') : null);
 
   let l1 = d.cur || 1, l2 = d.cur || 1;
   if (startRow && startRow.dataset.l) l1 = +startRow.dataset.l;
@@ -274,7 +273,8 @@ export function initSelectionBar() {
   // Any click ends a whole-file selection, except on the bar's buttons or a viewport scrollbar.
   document.addEventListener('mousedown', e => {
     // A right click opens the menu for the selection, so it must not end it.
-    if (!S.selAll || e.button === 2 || e.target.closest?.('#footer-sel, #sel-menu')) return;
+    const target = /** @type {HTMLElement|null} */ (e.target);
+    if (!S.selAll || e.button === 2 || target?.closest?.('#footer-sel, #sel-menu')) return;
     if (e.target === vp && (e.offsetX >= vp.clientWidth || e.offsetY >= vp.clientHeight)) return;
     clearSelectAll();
   }, true);
@@ -310,4 +310,5 @@ export function initSelectionBar() {
   addEventListener('resize', closeSelMenu);
   addEventListener('blur', closeSelMenu);
   document.addEventListener('scroll', closeSelMenu, true);
+  on('tab:activated', clearSelectAll);
 }

@@ -1,5 +1,6 @@
 // web/src/imageview.js
 import { $, S, doc_, esc } from './state.js';
+import { on } from './bus.js';
 import { updateStatus, fmtBytes } from './status.js';
 
 let ivInit = false;
@@ -301,4 +302,7 @@ export function initImageViewer() {
       applyImageTransform(d);
     }
   });
+
+  on('tab:activated', () => syncImageView());
+  on('tabs:cleared', () => syncImageView());
 }

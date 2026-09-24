@@ -1,5 +1,6 @@
 // web/src/tabs.js
 import { $, esc, S, doc_, api, apiPost, LH, CHUNK, withKeys } from './state.js';
+import { emit } from './bus.js';
 import { vp, sizer, rowsEl, editor } from './ui.js';
 import { render, layout, refineChunk } from './renderer.js';
 import { updateStatus, setStatusNote, refreshMetrics } from './status.js';
@@ -82,8 +83,9 @@ export async function openFile(path, opts = {}) {
   render();
   updateStatus();
   if ($('#panel-outline')?.classList.contains('active')) loadOutline();
-  if (push) pushHistory(path, line || d.cur, col);
+  if (push) pushHistory(path, line || d.cur);
   saveWorkspaceState();
+  emit('tab:activated', { doc: d, prevDoc: prev });
 }
 
 // VS Code-style diff gutter for the normal file view. Fetches once per opened
@@ -241,6 +243,7 @@ export async function reloadOpenTabs({ onlyIfChanged = false } = {}) {
   drawCrumbs();
   updateStatus();
   saveWorkspaceState();
+  if (d) emit('tab:activated', { doc: d });
 }
 
 export function centerLine(n) {
@@ -293,6 +296,8 @@ export function closeTab(i) {
     $('#empty').hidden = false; drawCrumbs();
     drawTabs(); updateStatus();
     saveWorkspaceState();
+    emit('tab:closed', { doc: closed, index: i });
+    emit('tabs:cleared');
     return;
   }
   if (i < S.active) {
@@ -307,6 +312,8 @@ export function closeTab(i) {
   drawTabs(); drawCrumbs(); layout();
   vp.scrollTop = d.scrollTop; render(); updateStatus();
   saveWorkspaceState();
+  emit('tab:closed', { doc: closed, index: i });
+  if (d) emit('tab:activated', { doc: d });
 }
 
 // Reopens the most recently closed file that is not open already, where it was left.
@@ -360,6 +367,7 @@ export function switchTab(i) {
   if ($('#panel-outline')?.classList.contains('active')) loadOutline();
   pushHistory(S.tabs[i].path, S.tabs[i].cur);
   saveWorkspaceState();
+  emit('tab:activated', { doc: S.tabs[i], prevDoc: prev });
 }
 
 let saveSessionTimer = null;

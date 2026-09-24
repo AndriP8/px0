@@ -398,23 +398,24 @@ export function openCommentComposer(info) {
   positionBox(entry);
   const target = findDiffRowEl(info.path, side, line);
   if (target) { target.scrollIntoView({ block: 'center', behavior: 'smooth' }); flashDiffRow(target); }
-  const ta = box.querySelector('.agent-input');
-  ta.focus();
+  const ta = /** @type {HTMLTextAreaElement|null} */ (box.querySelector('.agent-input'));
+  if (ta) ta.focus();
 
-  box.querySelector('.agent-ref').addEventListener('click', () => revealComposer(entry));
+  box.querySelector('.agent-ref')?.addEventListener('click', () => revealComposer(entry));
 
   const close = () => {
     openBoxes.delete(id);
     box.remove();
     if (!list().children.length) list().hidden = true;
   };
-  box.querySelector('.agent-close').addEventListener('click', close);
+  box.querySelector('.agent-close')?.addEventListener('click', close);
 
   const send = async () => {
+    if (!ta) return;
     const body = ta.value.trim();
     if (!body) return;
-    const errEl = box.querySelector('.agent-err');
-    errEl.hidden = true;
+    const errEl = /** @type {HTMLElement|null} */ (box.querySelector('.agent-err'));
+    if (errEl) errEl.hidden = true;
     try {
       const c = await apiPostJson('/api/pr/comments', { path: info.path, line, side, body });
       comments.push(c);
@@ -424,12 +425,14 @@ export function openCommentComposer(info) {
       renderCommentsPanel();
       renderMarkersForActiveDoc();
     } catch (e) {
-      errEl.hidden = false;
-      errEl.textContent = e.message || 'Could not add comment';
+      if (errEl) {
+        errEl.hidden = false;
+        errEl.textContent = e.message || 'Could not add comment';
+      }
     }
   };
-  box.querySelector('.agent-send').addEventListener('click', send);
-  ta.addEventListener('keydown', e => {
+  box.querySelector('.agent-send')?.addEventListener('click', send);
+  ta?.addEventListener('keydown', (/** @type {KeyboardEvent} */ e) => {
     if (e.key === 'Escape') { e.preventDefault(); close(); }
     else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
   });

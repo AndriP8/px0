@@ -210,7 +210,8 @@ export function initMetrics() {
     });
   }
   addEventListener('click', (e) => {
-    if (!e.target.closest('#metrics-menu, #st-metrics')) closeMetricsMenu();
+    const target = /** @type {HTMLElement|null} */ (e.target);
+    if (!target?.closest('#metrics-menu, #st-metrics')) closeMetricsMenu();
   });
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeMetricsMenu();

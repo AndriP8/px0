@@ -1,5 +1,5 @@
 // web/src/agent.js
-import { $, esc, S, api, apiPost, apiPostJson, MOD, keyLabel } from './state.js';
+import { $, esc, S, doc_, api, apiPost, apiPostJson, MOD, keyLabel } from './state.js';
 import { showToast } from './ui.js';
 import { setStatusNote } from './status.js';
 import { openFile, reloadOpenTabs } from './tabs.js';
@@ -1017,10 +1017,11 @@ export function initAgent() {
   }
 
   document.addEventListener('click', e => {
-    const row = e.target.closest('.row.agent-sel, .row.agent-anchor, .diff-row.agent-sel, .diff-row.agent-anchor, .diff-side.agent-sel, .diff-side.agent-anchor');
-    if (!row) return;
+    const target = /** @type {HTMLElement|null} */ (e.target);
+    const row = /** @type {HTMLElement|null} */ (target?.closest('.row.agent-sel, .row.agent-anchor, .diff-row.agent-sel, .diff-row.agent-anchor, .diff-side.agent-sel, .diff-side.agent-anchor'));
+    if (!row || !row.dataset.l) return;
     const line = +row.dataset.l;
-    const d = S.docs[S.active];
+    const d = doc_();
     if (!d) return;
     for (const s of sessions.values()) {
       if (s.target.path === d.path && line >= s.target.l1 && line <= s.target.l2) {

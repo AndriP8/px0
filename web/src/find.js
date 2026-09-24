@@ -1,5 +1,6 @@
 // web/src/find.js
 import { $, S, doc_, api, debounce, LH } from './state.js';
+import { on } from './bus.js';
 import { vp } from './ui.js';
 import { render, paint } from './renderer.js';
 import { centerLine } from './tabs.js';
@@ -121,4 +122,5 @@ export function initFind() {
     centerLine(Math.round((e.clientY - r.top) / r.height * d.total));
     render();
   });
+  on('tab:activated', clearFind);
 }

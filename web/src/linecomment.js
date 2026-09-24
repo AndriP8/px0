@@ -9,7 +9,8 @@ import { getReviewHandler } from './selbar.js';
 
 export function initLineComment() {
   document.addEventListener('click', e => {
-    const btn = e.target.closest('.line-btn');
+    const target = /** @type {HTMLElement|null} */ (e.target);
+    const btn = target?.closest('.line-btn');
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
