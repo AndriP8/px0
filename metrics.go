@@ -11,20 +11,24 @@ import (
 	"time"
 )
 
+// ProcessMetrics captures system resource usage of the px0 server process
+// and any child language server processes.
 type ProcessMetrics struct {
-	RSSBytes    uint64  `json:"rssBytes"`
-	CPUUsage    float64 `json:"cpuUsage"` // percentage e.g. 1.2%
-	Goroutine   int     `json:"goroutines"`
-	LSPEnabled  bool    `json:"lspEnabled"`
-	LSPMemBytes uint64  `json:"lspMemBytes"` // combined RSS of running language server processes
+	RSSBytes    uint64  `json:"rssBytes"`    // Resident set size in bytes
+	CPUUsage    float64 `json:"cpuUsage"`    // CPU utilization percentage (e.g. 1.2%)
+	Goroutine   int     `json:"goroutines"`  // Current number of active goroutines
+	LSPEnabled  bool    `json:"lspEnabled"`  // Whether LSP is active
+	LSPMemBytes uint64  `json:"lspMemBytes"` // Combined RSS of running language server child processes
 }
 
+// metricsCollector periodically samples process CPU utilization by calculating
+// delta CPU time consumed over delta wall-clock time.
 type metricsCollector struct {
-	mu           sync.Mutex
-	lastSample   time.Time
-	lastCPUTime  time.Duration
-	lastUsage    float64
-	numCPU       int
+	mu          sync.Mutex
+	lastSample  time.Time
+	lastCPUTime time.Duration
+	lastUsage   float64
+	numCPU      int
 }
 
 var globalMetrics = &metricsCollector{

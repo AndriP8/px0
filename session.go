@@ -12,10 +12,14 @@ import (
 	"sync"
 )
 
+// SessionTab represents an open editor tab pointing to a file path.
 type SessionTab struct {
 	Path string `json:"path"`
 }
 
+// WorkspaceSession stores the persistent UI state for a workspace:
+// the list of open tabs, the currently active tab index, expanded directory tree paths,
+// and any unsaved PR review comment drafts.
 type WorkspaceSession struct {
 	Tabs     []SessionTab `json:"tabs"`
 	Active   int          `json:"active"`
@@ -23,6 +27,10 @@ type WorkspaceSession struct {
 	Drafts   []prComment  `json:"drafts,omitempty"`
 }
 
+// sessionFilePath returns the path to the JSON file where workspace session state is saved.
+// It uses XDG_STATE_HOME/px0/sessions if available, falling back to ~/.px0/sessions or
+// os.TempDir()/px0-sessions. The file name is derived from the base path or an 8-byte
+// SHA-256 hash of the cleaned workspace root path.
 func sessionFilePath(basePath, root string) string {
 	dir := ""
 	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
@@ -45,12 +53,16 @@ func sessionFilePath(basePath, root string) string {
 	return filepath.Join(dir, key+".json")
 }
 
+// sessionManager coordinates concurrent thread-safe access and persistence
+// for workspace session data on disk.
 type sessionManager struct {
 	mu   sync.Mutex
 	path string
 	data WorkspaceSession
 }
 
+// newSessionManager initializes a session manager for the given workspace,
+// loading any existing session JSON file from disk.
 func newSessionManager(basePath, root string) *sessionManager {
 	p := sessionFilePath(basePath, root)
 	sm := &sessionManager{
@@ -64,6 +76,7 @@ func newSessionManager(basePath, root string) *sessionManager {
 	return sm
 }
 
+// load reads the session state from disk into memory, initializing empty slices if nil.
 func (sm *sessionManager) load() {
 	if sm.path == "" {
 		return
@@ -84,12 +97,15 @@ func (sm *sessionManager) load() {
 	}
 }
 
+// Get returns a snapshot of the current workspace session.
 func (sm *sessionManager) Get() WorkspaceSession {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	return sm.data
 }
 
+// Update executes a mutation function on the session state under mutex protection
+// and persists the resulting state formatted as JSON to disk.
 func (sm *sessionManager) Update(fn func(*WorkspaceSession)) WorkspaceSession {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -104,6 +120,9 @@ func (sm *sessionManager) Update(fn func(*WorkspaceSession)) WorkspaceSession {
 	return sm.data
 }
 
+// handleSession handles GET and POST requests for /api/session.
+// GET returns the current workspace session state.
+// POST updates tab list, active tab, and open directories, saving changes to disk.
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

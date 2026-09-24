@@ -12,6 +12,8 @@ import (
 // are stored with the other per-user files px0 writes (~/.px0/settings.json),
 // never in the working tree.
 
+// settings stores user configuration written to ~/.px0/settings.json (or XDG_CONFIG_HOME/px0/settings.json).
+// All settings are optional pointers so omitted values fall back to application defaults.
 type settings struct {
 	Agent  string            `json:"agent,omitempty"`
 	Models map[string]string `json:"models,omitempty"`
@@ -49,6 +51,7 @@ func settingsPath() string {
 	return filepath.Join(home, ".px0", "settings.json")
 }
 
+// settingSchemaItem describes a configurable setting for dynamic rendering in the settings modal.
 type settingSchemaItem struct {
 	Key         string   `json:"key"`
 	Title       string   `json:"title"`

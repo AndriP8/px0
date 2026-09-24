@@ -1,3 +1,5 @@
+// Package main implements px0: a fast, local-first code navigator and review tool
+// that opens any repository or pull request in a responsive browser UI.
 package main
 
 import (

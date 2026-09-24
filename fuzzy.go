@@ -7,13 +7,16 @@ import (
 	"sync"
 )
 
+// FuzzyResult represents a matched file path ranked by the fuzzy search engine.
 type FuzzyResult struct {
-	Path  string `json:"path"`
-	Name  string `json:"name"`
-	Pos   []int  `json:"pos"` // byte offsets in Path that matched, for highlighting
-	score int
+	Path  string `json:"path"` // Workspace-relative path to the matched file
+	Name  string `json:"name"` // Basename of the file
+	Pos   []int  `json:"pos"`  // Byte offsets in Path that matched, used by frontend for highlight badges
+	score int    // Computed match quality score (higher is better)
 }
 
+// isBoundary reports whether a byte acts as a word or segment boundary
+// in file paths (e.g. slashes, underscores, dashes, dots, spaces, or at-symbols).
 func isBoundary(b byte) bool {
 	switch b {
 	case '/', '_', '-', '.', ' ', '@':

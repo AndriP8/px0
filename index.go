@@ -11,79 +11,93 @@ import (
 	"time"
 )
 
+// FileEntry represents a single indexed file in the workspace,
+// storing its relative path, name, size, and pre-computed lowercase representation
+// for fast fuzzy searching.
 type FileEntry struct {
-	Path      string `json:"path"` // slash-separated, relative to root
-	Name      string `json:"name"`
-	Size      int64  `json:"size"`
-	lower     string // cached lowercase Path for matching
-	nameStart int    // index in Path where the basename begins
+	Path      string `json:"path"` // Slash-separated path relative to workspace root
+	Name      string `json:"name"` // Basename of the file
+	Size      int64  `json:"size"` // File size in bytes
+	lower     string // Cached lowercase Path for fast case-insensitive matching
+	nameStart int    // Byte offset in Path where the basename begins
 }
 
+// Node represents a file or directory entry in the hierarchical file tree view.
 type Node struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Dir     bool   `json:"dir"`
-	Size    int64  `json:"size"`
-	Ignored bool   `json:"ignored,omitempty"` // matched by .gitignore: listed, never indexed
-	Status     string `json:"status,omitempty"`     // git working-tree status: M/A/D/?/R/C/U
-	Staged     bool   `json:"staged,omitempty"`     // file: has staged (index) changes
-	Dirty      bool   `json:"dirty,omitempty"`      // folder: contains a git-changed descendant
-	YourStatus string `json:"yourStatus,omitempty"` // PR mode: reviewer's change since checkout
-	YourDirty  bool   `json:"yourDirty,omitempty"`  // PR mode folder: contains reviewer-changed descendant
+	Name       string `json:"name"`                 // File or directory name
+	Path       string `json:"path"`                 // Slash-separated path relative to workspace root
+	Dir        bool   `json:"dir"`                  // True if this node is a directory
+	Size       int64  `json:"size"`                 // File size in bytes (0 for directories)
+	Ignored    bool   `json:"ignored,omitempty"`    // Matched by .gitignore: listed in tree dimmed, never indexed
+	Status     string `json:"status,omitempty"`     // Git working-tree status code: M (modified), A (added), D (deleted), U (untracked), etc.
+	Staged     bool   `json:"staged,omitempty"`     // True if the file has staged changes in the git index
+	Dirty      bool   `json:"dirty,omitempty"`      // For folders: true if any descendant has git changes
+	YourStatus string `json:"yourStatus,omitempty"` // PR review mode: reviewer's local changes since checkout
+	YourDirty  bool   `json:"yourDirty,omitempty"`  // PR review mode for folders: contains reviewer-changed descendant
 }
 
 // vcsDirs are version control internals. Unlike other ignored entries they are
 // not even listed: nobody reads them, and .git is present in nearly every repo.
 var vcsDirs = map[string]bool{".git": true, ".hg": true, ".svn": true}
 
+// Index maintains in-memory representation of the workspace filesystem:
+// a flat list of all unignored files for fast searching, a directory tree map
+// for lazy sidebar rendering, and live git status tracking.
 type Index struct {
 	root string
 
-	mu       sync.RWMutex
-	files    []FileEntry
-	children map[string][]Node
-	builtAt    time.Time
-	buildMS    int64
-	gitChanges   int
-	gitFiles     []string
-	gitStatusMap map[string]string
-	gitStagedMap map[string]bool
+	mu               sync.RWMutex
+	files            []FileEntry
+	children         map[string][]Node
+	builtAt          time.Time
+	buildMS          int64
+	gitChanges       int
+	gitFiles         []string
+	gitStatusMap     map[string]string
+	gitStagedMap     map[string]bool
 	gitYourStatusMap map[string]string
-	diffBase     string
-	prHead       string
-	readyCh      chan struct{}
+	diffBase         string
+	prHead           string
+	readyCh          chan struct{}
 }
 
+// NewIndex constructs a new unpopulated workspace index for the given root directory.
 func NewIndex(root string) *Index {
 	return &Index{root: root, children: map[string][]Node{}, readyCh: make(chan struct{})}
 }
 
+// Root returns the absolute path to the workspace root directory.
 func (ix *Index) Root() string { return ix.root }
 
+// SetDiffBase sets the git ref or commit against which working tree diffs and statuses are computed.
 func (ix *Index) SetDiffBase(base string) {
 	ix.mu.Lock()
 	ix.diffBase = base
 	ix.mu.Unlock()
 }
 
+// DiffBase returns the current git diff base ref (e.g. "HEAD" or PR merge-base).
 func (ix *Index) DiffBase() string {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	return ix.diffBase
 }
 
+// SetPRHead stores the checked-out PR head commit SHA in PR review mode.
 func (ix *Index) SetPRHead(head string) {
 	ix.mu.Lock()
 	ix.prHead = head
 	ix.mu.Unlock()
 }
 
+// PRHead returns the checked-out PR head commit SHA, or empty if not in PR review mode.
 func (ix *Index) PRHead() string {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	return ix.prHead
 }
 
+// Ready reports whether the initial index build has finished.
 func (ix *Index) Ready() bool {
 	select {
 	case <-ix.readyCh:
@@ -93,6 +107,7 @@ func (ix *Index) Ready() bool {
 	}
 }
 
+// WaitReady blocks until the initial index build completes or ctx is canceled.
 func (ix *Index) WaitReady(ctx context.Context) error {
 	select {
 	case <-ix.readyCh:
@@ -102,18 +117,21 @@ func (ix *Index) WaitReady(ctx context.Context) error {
 	}
 }
 
+// Stats returns the total indexed file count, the timestamp of the build, and duration in milliseconds.
 func (ix *Index) Stats() (files int, builtAt time.Time, ms int64) {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	return len(ix.files), ix.builtAt, ix.buildMS
 }
 
+// Files returns a copy or view of all indexed file entries.
 func (ix *Index) Files() []FileEntry {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	return ix.files
 }
 
+// GitChanges returns the number of modified files and their workspace-relative paths.
 func (ix *Index) GitChanges() (int, []string) {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
@@ -122,6 +140,7 @@ func (ix *Index) GitChanges() (int, []string) {
 	return ix.gitChanges, res
 }
 
+// GitStatusMap returns a copy of the mapping from relative path to git status letter.
 func (ix *Index) GitStatusMap() map[string]string {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
@@ -135,6 +154,7 @@ func (ix *Index) GitStatusMap() map[string]string {
 	return res
 }
 
+// GitStagedMap returns a copy of the mapping from relative path to staged boolean flag.
 func (ix *Index) GitStagedMap() map[string]bool {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
@@ -148,6 +168,7 @@ func (ix *Index) GitStagedMap() map[string]bool {
 	return res
 }
 
+// GitYourStatusMap returns a copy of the reviewer local modifications map in PR mode.
 func (ix *Index) GitYourStatusMap() map[string]string {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
@@ -207,6 +228,9 @@ func (ix *Index) underIgnoredLocked(dir string) bool {
 	return false
 }
 
+// listIgnored reads the immediate entries of an ignored directory directly from disk on demand,
+// marking all child nodes as Ignored. This allows the file tree UI to expand ignored directories
+// without needing them to be walked or kept in the search index.
 func (ix *Index) listIgnored(dir string) ([]Node, bool) {
 	ents, err := os.ReadDir(filepath.Join(ix.root, filepath.FromSlash(dir)))
 	if err != nil {

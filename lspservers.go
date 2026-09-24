@@ -152,6 +152,9 @@ const (
 // maxLSPRestarts bounds how often one crashed language server is respawned.
 const maxLSPRestarts = 3
 
+// lspManager coordinates background language servers across file types and extensions.
+// It manages on-demand server lazy starting, discovery, restart on crash, installation jobs,
+// and path allowlisting for external references (such as standard library files).
 type lspManager struct {
 	root    string
 	enabled bool
@@ -194,6 +197,8 @@ func (m *lspManager) Allowed(abs string) bool {
 	return m.external[abs]
 }
 
+// newLSPManager creates a new language server manager for root.
+// If enabled is true, server discovery begins in the background without blocking startup.
 func newLSPManager(root string, enabled bool) *lspManager {
 	m := &lspManager{
 		root: root, enabled: enabled,

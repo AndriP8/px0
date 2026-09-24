@@ -12,22 +12,31 @@ import (
 	"time"
 )
 
+// GitStatusPayload contains the complete serialized git status event sent to the browser
+// over Server-Sent Events (SSE). It includes working tree status, staged files, dirty directories,
+// current branch, commit ahead/behind counts, and recent commits.
 type GitStatusPayload struct {
-	Git           bool              `json:"git"`
-	GitChanges    int               `json:"gitChanges"`
-	GitFiles      []string          `json:"gitFiles"`
-	Statuses      map[string]string `json:"statuses"`
-	DirtyDirs     map[string]bool   `json:"dirtyDirs,omitempty"`
-	Staged        map[string]bool   `json:"staged,omitempty"`
-	YourStatuses  map[string]string `json:"yourStatuses,omitempty"`
-	YourDirtyDirs map[string]bool   `json:"yourDirtyDirs,omitempty"`
-	Branch        string            `json:"branch,omitempty"`
-	RecentCommits []GitCommit       `json:"recentCommits,omitempty"`
-	CommitsURL    string            `json:"commitsUrl,omitempty"`
-	Ahead         int               `json:"ahead"`
-	Behind        int               `json:"behind"`
+	Git           bool              `json:"git"`                     // True if root is inside a git repository
+	GitChanges    int               `json:"gitChanges"`              // Total count of modified, added, deleted, or untracked files
+	GitFiles      []string          `json:"gitFiles"`                // List of modified file paths relative to root
+	Statuses      map[string]string `json:"statuses"`                // Relative path -> status code (e.g. "M", "A", "D", "U")
+	DirtyDirs     map[string]bool   `json:"dirtyDirs,omitempty"`     // Relative directory path -> true if any descendant is modified
+	Staged        map[string]bool   `json:"staged,omitempty"`        // Relative path -> true if file has staged changes
+	YourStatuses  map[string]string `json:"yourStatuses,omitempty"`  // PR mode: relative path -> reviewer modification status
+	YourDirtyDirs map[string]bool   `json:"yourDirtyDirs,omitempty"` // PR mode: directory path -> contains reviewer changes
+	Branch        string            `json:"branch,omitempty"`        // Active branch name
+	RecentCommits []GitCommit       `json:"recentCommits,omitempty"` // Recent git commits for commit list UI
+	CommitsURL    string            `json:"commitsUrl,omitempty"`    // Web URL to view commits on GitHub/forge
+	Ahead         int               `json:"ahead"`                   // Commits ahead of upstream tracking branch
+	Behind        int               `json:"behind"`                  // Commits behind upstream tracking branch
 }
 
+// GitWatcher monitors git state changes in the background and broadcasts updates
+// to connected browser clients over SSE (/api/stream). It uses a hybrid detection strategy:
+//  1. Fast path: 1-second polling of .git metadata files (HEAD, index, packed-refs) to instantly
+//     detect CLI operations (git commit, git checkout, git add).
+//  2. Worktree path: adaptive polling of working tree file modifications.
+//  3. Manual triggers: immediate re-evaluations triggered on user UI actions.
 type GitWatcher struct {
 	ix   *Index
 	root string
@@ -48,6 +57,7 @@ type GitWatcher struct {
 	lastBehind     int
 }
 
+// NewGitWatcher constructs a new GitWatcher attached to the given workspace index.
 func NewGitWatcher(ix *Index) *GitWatcher {
 	gw := &GitWatcher{
 		ix:             ix,

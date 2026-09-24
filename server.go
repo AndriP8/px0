@@ -57,6 +57,8 @@ func cleanBasePath(p string) string {
 	return p
 }
 
+// Server is the main px0 HTTP server handling the web UI, static assets,
+// REST API endpoints, Server-Sent Events (SSE), and workspace services.
 type Server struct {
 	ix        *Index
 	lsp       *lspManager
@@ -74,6 +76,7 @@ type Server struct {
 	lastReq atomic.Int64 // unix nanos of the most recent request
 }
 
+// BasePath returns the URL path prefix configured for this server (e.g. "/" or "/rev-123/").
 func (s *Server) BasePath() string {
 	if s.basePath == "" {
 		return "/"
@@ -173,6 +176,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/session"), s.handleSession)
 }
 
+// NewServer creates and initializes a px0 Server instance, binding index and language servers,
+// starting the background GitWatcher, and registering all HTTP and SSE routes.
 func NewServer(ix *Index, lsp *lspManager, basePaths ...string) *Server {
 	if lsp == nil {
 		lsp = newLSPManager(ix.Root(), false)
@@ -214,6 +219,8 @@ func (s *Server) scavenge() {
 	}
 }
 
+// ServeHTTP delegates incoming HTTP requests to the configured ServeMux,
+// recording request timing and updating access timestamps.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	streamPath := s.routePath("/api/stream")
 	gitStreamPath := s.routePath("/api/git/stream")

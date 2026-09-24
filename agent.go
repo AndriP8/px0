@@ -345,22 +345,23 @@ type agentBatchItem struct {
 	Instruction string `json:"instruction"`
 }
 
-// agentJob is one dispatch, snapshot-able while it runs.
+// agentJob represents a single background editing task dispatched to an AI coding harness.
+// It tracks real-time progress, log outputs, duration, affected files, and cancellation handlers.
 type agentJob struct {
-	ID         int64            `json:"id"`
-	Harness    string           `json:"harness"`
-	Path       string           `json:"path"`
-	Lines      string           `json:"lines"`
-	Running    bool             `json:"running"`
-	Error      string           `json:"error,omitempty"`
-	Log        string           `json:"log"`
-	Stdout     string           `json:"stdout,omitempty"`
-	Stderr     string           `json:"stderr,omitempty"`
-	Changed    []string         `json:"changed"`
-	Ms         int64            `json:"ms"`
-	Tracked    bool             `json:"tracked"`
-	BatchCount int              `json:"batchCount,omitempty"`
-	Items      []agentBatchItem `json:"items,omitempty"`
+	ID         int64            `json:"id"`                   // Unique monotonic job identifier
+	Harness    string           `json:"harness"`              // Name of the harness executing this job
+	Path       string           `json:"path"`                 // Relative file path targeted for editing
+	Lines      string           `json:"lines"`                // Line range formatted string (e.g. "L12-L30")
+	Running    bool             `json:"running"`              // True while harness process is actively executing
+	Error      string           `json:"error,omitempty"`      // Error message if the job failed or was aborted
+	Log        string           `json:"log"`                  // Tail of merged stdout/stderr log output
+	Stdout     string           `json:"stdout,omitempty"`     // Stdout log output tail
+	Stderr     string           `json:"stderr,omitempty"`     // Stderr log output tail
+	Changed    []string         `json:"changed"`              // Files detected as modified after job execution
+	Ms         int64            `json:"ms"`                   // Elapsed runtime in milliseconds
+	Tracked    bool             `json:"tracked"`              // Whether telemetry tracking has been recorded
+	BatchCount int              `json:"batchCount,omitempty"` // Number of items in batch review edit
+	Items      []agentBatchItem `json:"items,omitempty"`      // Detailed batch items if multi-file edit
 
 	ranges []agentRange
 	l1, l2 int
