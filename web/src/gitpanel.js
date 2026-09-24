@@ -49,7 +49,6 @@ export function initGitPanel() {
   $('#git-push')?.addEventListener('click', doPush);
   $('#git-pull')?.addEventListener('click', doPull);
   $('#git-generate-msg')?.addEventListener('click', doCommitWithAI);
-  $('#git-settings-nudge')?.addEventListener('click', () => openSettings('ui', 'Git & Diff'));
   $('#git-token-nudge')?.addEventListener('click', () => {
     showToast('!', 'No GitHub token found: set GITHUB_TOKEN, set GH_TOKEN, or run `gh auth login` -- or add one below.', 5000);
     openSettings('ui', 'GitHub', 'github.token');

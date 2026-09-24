@@ -255,16 +255,16 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 .git-instructions-link:hover {
   color: var(--fg);
 }
-.git-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.git-panel-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
 .git-panel-actions .footer-btn {
   border: 1px solid var(--line); background: var(--bg3); border-radius: var(--r);
   height: 24px; padding: 3px 8px; opacity: 1;
+  width: 100%; min-width: 0; justify-content: center;
 }
 .git-panel-actions .footer-btn:hover:not(:disabled) {
   border-color: var(--accent); background: var(--bg4);
 }
 .git-panel-actions .footer-btn:disabled { opacity: .5; cursor: default; }
-.git-panel-actions .footer-btn { flex: 1 1 auto; justify-content: center; }
 
 /* Harness/model pickers stacked (the sidebar is too narrow for them side by
    side, as in the batch-edit bar), with the AI commit action -- the panel's
@@ -272,21 +272,27 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 .git-agent-picker { display: flex; flex-direction: column; gap: 6px; }
 .git-agent-picker .agent-harness-select,
 .git-agent-picker .agent-model-select { width: 100%; max-width: none; }
+#git-generate-msg,
 .git-generate-btn {
-  width: 100%; justify-content: center; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; height: 24px; padding: 0 8px;
   border: 1px solid var(--accent); border-radius: var(--r);
-  background: var(--accent); color: var(--on-accent); font-weight: 600; opacity: 1;
+  background: var(--accent); color: var(--on-accent); font: 600 11px/1 var(--ui);
+  opacity: 1; cursor: pointer; transition: opacity .15s, background .15s;
 }
+#git-generate-msg:hover:not(:disabled),
 .git-generate-btn:hover:not(:disabled) { opacity: .9; }
+#git-generate-msg:disabled,
 .git-generate-btn:disabled { opacity: .5; cursor: default; }
 
 .git-commit-section { display: flex; flex-direction: column; gap: 6px; }
 .git-commit-section[hidden] { display: none; }
 
 .git-ai-row { display: flex; align-items: center; gap: 6px; width: 100%; }
+.git-ai-row #git-generate-msg,
 .git-ai-row .git-generate-btn { flex: 1; min-width: 0; }
 .git-nudge-btn {
-  flex: none; width: 28px; height: 28px; padding: 0;
+  flex: none; width: 24px; height: 24px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--line); border-radius: var(--r);
   background: var(--bg3); color: var(--faint); cursor: pointer;
