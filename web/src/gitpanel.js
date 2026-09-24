@@ -54,6 +54,14 @@ export function initGitPanel() {
     showToast('!', 'No GitHub token found: set GITHUB_TOKEN, set GH_TOKEN, or run `gh auth login` -- or add one below.', 5000);
     openSettings('ui', 'GitHub', 'github.token');
   });
+  $('#git-write-msg-link')?.addEventListener('click', e => {
+    e.preventDefault();
+    toggleCommitMsgBox();
+  });
+  $('#git-generate-link')?.addEventListener('click', e => {
+    e.preventDefault();
+    doGenerateMessage();
+  });
   $('#git-instructions-link')?.addEventListener('click', e => {
     e.preventDefault();
     openSettings('ui', 'Git & Diff', 'git.commitMessageInstruction');
@@ -166,8 +174,28 @@ export async function unstagePath(path) {
   }
 }
 
+// The message box stays collapsed behind a text link since most commits use
+// "Stage all + Commit with AI"; open it on demand to write a message by hand.
+function toggleCommitMsgBox(open) {
+  const ta = $('#git-commit-msg');
+  const link = $('#git-write-msg-link');
+  if (!ta) return;
+  ta.hidden = open === undefined ? !ta.hidden : !open;
+  if (link) link.textContent = ta.hidden ? 'write message' : 'hide message';
+  const gen = $('#git-generate-link');
+  if (gen) {
+    gen.hidden = ta.hidden;
+    if (gen.previousElementSibling) gen.previousElementSibling.hidden = ta.hidden;
+  }
+  if (!ta.hidden) ta.focus();
+}
+
 async function doCommit() {
   const ta = $('#git-commit-msg');
+  if (ta?.hidden) {
+    toggleCommitMsgBox(true);
+    return;
+  }
   const message = ta ? ta.value.trim() : '';
   if (!message) {
     showToast('!', 'Write a commit message first');
@@ -178,6 +206,7 @@ async function doCommit() {
   try {
     await apiPostJson('/api/git/commit', { message });
     if (ta) ta.value = '';
+    toggleCommitMsgBox(false);
     showToast('✓', 'Committed');
     await fetchRecentCommits();
   } catch (e) {
@@ -252,7 +281,15 @@ async function doCommitWithAI() {
     showToast('!', e.message || 'Could not start generation');
     return;
   }
-  pollCommitMessage(job.id, btn);
+  pollCommitMessage(job.id, {
+    progress: t => { if (btn) btn.textContent = t; },
+    reset: () => resetGenerateBtn(btn),
+    done: async text => {
+      const ta = $('#git-commit-msg');
+      if (ta) ta.value = text;
+      await commitWithMessage(text, btn);
+    },
+  });
 }
 
 function resetGenerateBtn(btn) {
@@ -261,38 +298,71 @@ function resetGenerateBtn(btn) {
   btn.textContent = 'Stage all + Commit with AI';
 }
 
-function pollCommitMessage(id, btn) {
+// Polls the commit-message job. `ui` abstracts the trigger element:
+// progress(text) shows status, reset() restores it, done(text) receives the
+// cleaned message (the AI button commits it; the link only fills the textarea).
+function pollCommitMessage(id, ui) {
   const poll = async () => {
     let j;
     try {
       j = await api('/api/agent/job?id=' + id);
     } catch (e) {
-      resetGenerateBtn(btn);
+      ui.reset();
       showToast('!', e.message || 'Generation failed');
       return;
     }
     if (j.running) {
       const sec = Math.round((j.ms || 0) / 1000);
-      if (btn) btn.textContent = 'Writing message... (' + sec + 's)';
+      ui.progress('Writing message... (' + sec + 's)');
       setTimeout(poll, 600);
       return;
     }
     if (j.error) {
-      resetGenerateBtn(btn);
+      ui.reset();
       showToast('!', (j.harness || 'agent') + ': ' + j.error);
       return;
     }
     const text = cleanCommitMessage(j.stdout || j.log || '');
     if (!text) {
-      resetGenerateBtn(btn);
+      ui.reset();
       showToast('!', 'Harness returned an empty message');
       return;
     }
-    const ta = $('#git-commit-msg');
-    if (ta) ta.value = text;
-    await commitWithMessage(text, btn);
+    await ui.done(text);
   };
   setTimeout(poll, 400);
+}
+
+// Generates a message for already-staged changes and fills the textarea
+// without committing, so it can be reviewed or edited first.
+async function doGenerateMessage() {
+  const link = $('#git-generate-link');
+  const ta = $('#git-commit-msg');
+  if (!link || link.dataset.busy) return;
+  const label = link.textContent;
+  link.dataset.busy = '1';
+  const reset = () => {
+    delete link.dataset.busy;
+    link.textContent = label;
+  };
+  link.textContent = 'Writing message...';
+  let job;
+  try {
+    job = await apiPostJson('/api/git/commit-message', {});
+  } catch (e) {
+    reset();
+    showToast('!', e.message || 'Could not start generation');
+    return;
+  }
+  pollCommitMessage(job.id, {
+    progress: t => { link.textContent = t; },
+    reset,
+    done: text => {
+      reset();
+      if (ta) ta.value = text;
+      toggleCommitMsgBox(true);
+    },
+  });
 }
 
 async function commitWithMessage(message, btn) {
@@ -304,6 +374,7 @@ async function commitWithMessage(message, btn) {
     showToast('✓', 'Committed with AI');
     await fetchRecentCommits();
   } catch (e) {
+    toggleCommitMsgBox(true); // surface the generated message so it isn't lost
     showToast('!', e.message || 'Commit failed');
   } finally {
     resetGenerateBtn(btn);

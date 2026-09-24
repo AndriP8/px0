@@ -44,8 +44,12 @@
               <button id="git-settings-nudge" class="footer-btn git-nudge-btn" type="button" title="Configure Git &amp; Diff settings (instructions, diffs, etc.)" aria-label="Git &amp; Diff settings"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
             </div>
           </div>
-          <textarea id="git-commit-msg" class="git-commit-msg" rows="3" spellcheck="false" autocomplete="off" placeholder="Commit message..."></textarea>
+          <textarea id="git-commit-msg" class="git-commit-msg" rows="3" spellcheck="false" autocomplete="off" placeholder="Commit message..." hidden></textarea>
           <div class="git-instructions-wrap">
+            <a id="git-write-msg-link" class="git-instructions-link" href="#" role="button" title="Write the commit message yourself">write message</a>
+            <span class="git-link-sep" aria-hidden="true" hidden>&middot;</span>
+            <a id="git-generate-link" class="git-instructions-link" href="#" role="button" title="Generate a message for staged changes using the AI instructions" hidden>generate with AI</a>
+            <span class="git-link-sep" aria-hidden="true">&middot;</span>
             <a id="git-instructions-link" class="git-instructions-link" href="#" role="button" title="Configure commit message instructions for AI in Settings">instructions for AI</a>
           </div>
           <div class="git-panel-actions git-commit-actions">

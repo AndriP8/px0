@@ -48,7 +48,7 @@ input { font: inherit; color: inherit; background: none; border: 0; outline: 0; 
 
 /* ---------- sidebar ---------- */
 #side {
-  width: 310px; flex: none; background: var(--bg2); border-right: 1px solid var(--line);
+  width: 340px; flex: none; background: var(--bg2); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; overflow: hidden;
 }
 body.side-hidden #side, body.side-hidden #resizer { display: none; }
@@ -241,6 +241,8 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
   padding: 6px 8px; font: 12px var(--mono); resize: vertical; min-height: 60px;
 }
 .git-commit-msg:focus { border-color: var(--accent); }
+.git-commit-msg[hidden] { display: none; }
+.git-link-sep { font: 11px var(--ui); color: var(--faint); margin: 0 6px; }
 .git-instructions-wrap {
   display: flex; align-items: center; justify-content: flex-start;
   margin-top: -2px; margin-bottom: 2px; padding: 0 1px;
