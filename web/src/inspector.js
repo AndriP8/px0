@@ -130,6 +130,7 @@ export function initInspector() {
   }));
 
   $('#btn-close-right')?.addEventListener('click', hideRightInspector);
+  $('#btn-open-right')?.addEventListener('click', () => showRightInspector($('#tab-threads')?.hidden === false ? 'threads' : 'refs'));
 
   /* Right inspector resizer */
   (() => {

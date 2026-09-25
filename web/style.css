@@ -477,6 +477,16 @@ body.right-hidden #right-side, body.right-hidden #right-resizer { display: none;
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 /* View-mode switches (Markdown Preview/Source, git Diff), pinned to the right
    of the tab bar. The bar pads its end so the last tab can scroll clear of them. */
+.open-right {
+  width: 24px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--dim); background: var(--bg3); border: 1px solid var(--line); border-radius: var(--r);
+}
+.open-right:hover { color: var(--accent-fg); border-color: var(--accent); }
+body:not(.right-hidden) .open-right { display: none; }
+body.right-hidden #tabs { padding-right: 38px; }
+body.right-hidden.md-tab #tabs { padding-right: 178px; }
+body.right-hidden.diff-tab #tabs { padding-right: 188px; }
+body.right-hidden.md-tab.diff-tab #tabs { padding-right: 328px; }
 #view-switches { position: absolute; top: 3px; right: 8px; z-index: 7; display: flex; gap: 6px; }
 .view-switch {
   height: 22px; display: flex; gap: 1px;
