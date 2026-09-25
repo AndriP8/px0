@@ -708,7 +708,7 @@ body.md-tab.diff-tab #tabs { padding-right: 290px; }
   color: var(--accent);
   pointer-events: auto;
 }
-.c i { font-style: normal; }
+.c i, .diff-code i { font-style: normal; }
 
 /* Word wrap mode (Alt+Z) */
 body.word-wrap .row { height: auto; min-height: var(--lh); }
@@ -842,17 +842,17 @@ body.word-wrap .c { white-space: pre-wrap; word-break: break-word; overflow-wrap
 
 
 /* token colours: the code view, and fenced code in the Markdown preview */
-.c .k, .md-code .k{color:var(--k)} .c .kt, .md-code .kt{color:var(--kt)}
-.c .nf, .md-code .nf{color:var(--nf)} .c .nc, .md-code .nc{color:var(--nc)}
-.c .nb, .md-code .nb{color:var(--nb)} .c .nv, .md-code .nv{color:var(--nv)}
-.c .no, .md-code .no{color:var(--no)} .c .na, .md-code .na{color:var(--na)}
-.c .nt, .md-code .nt{color:var(--nt)} .c .nd, .md-code .nd{color:var(--nd)}
-.c .np, .md-code .np{color:var(--np)} .c .s, .md-code .s{color:var(--s)}
-.c .m, .md-code .m{color:var(--m)} .c .o, .md-code .o{color:var(--o)} .c .p, .md-code .p{color:var(--p)}
-.c .c, .md-code .c{color:var(--c);font-style:normal} .c .cp, .md-code .cp{color:var(--cp)}
-.c .gi, .md-code .gi{color:var(--gi);background:var(--gi-bg)} .c .gd, .md-code .gd{color:var(--gd);background:var(--gd-bg)}
-.c .gh, .md-code .gh{color:var(--accent-fg);font-weight:600} .c .ge, .md-code .ge{font-style:italic} .c .gs, .md-code .gs{font-weight:600}
-.c .err, .md-code .err{color:var(--err);text-decoration:underline wavy}
+.c .k, .md-code .k, .diff-code .k{color:var(--k)} .c .kt, .md-code .kt, .diff-code .kt{color:var(--kt)}
+.c .nf, .md-code .nf, .diff-code .nf{color:var(--nf)} .c .nc, .md-code .nc, .diff-code .nc{color:var(--nc)}
+.c .nb, .md-code .nb, .diff-code .nb{color:var(--nb)} .c .nv, .md-code .nv, .diff-code .nv{color:var(--nv)}
+.c .no, .md-code .no, .diff-code .no{color:var(--no)} .c .na, .md-code .na, .diff-code .na{color:var(--na)}
+.c .nt, .md-code .nt, .diff-code .nt{color:var(--nt)} .c .nd, .md-code .nd, .diff-code .nd{color:var(--nd)}
+.c .np, .md-code .np, .diff-code .np{color:var(--np)} .c .s, .md-code .s, .diff-code .s{color:var(--s)}
+.c .m, .md-code .m, .diff-code .m{color:var(--m)} .c .o, .md-code .o, .diff-code .o{color:var(--o)} .c .p, .md-code .p, .diff-code .p{color:var(--p)}
+.c .c, .md-code .c, .diff-code .c{color:var(--c);font-style:normal} .c .cp, .md-code .cp, .diff-code .cp{color:var(--cp)}
+.c .gi, .md-code .gi, .diff-code .gi{color:var(--gi);background:var(--gi-bg)} .c .gd, .md-code .gd, .diff-code .gd{color:var(--gd);background:var(--gd-bg)}
+.c .gh, .md-code .gh, .diff-code .gh{color:var(--accent-fg);font-weight:600} .c .ge, .md-code .ge, .diff-code .ge{font-style:italic} .c .gs, .md-code .gs, .diff-code .gs{font-weight:600}
+.c .err, .md-code .err, .diff-code .err{color:var(--err);text-decoration:underline wavy}
 
 /* ---------- diff view (Mod+D): split (default) or unified render of a
    modified file's git diff against HEAD, in its own overlay like the
@@ -899,9 +899,9 @@ body.word-wrap .c { white-space: pre-wrap; word-break: break-word; overflow-wrap
 .diff-code { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; padding-right: 12px; }
 .diff-row, .diff-side { display: flex; }
 .diff-row.diff-add, .diff-side.diff-add { background: var(--gi-bg); }
-.diff-row.diff-add .diff-code, .diff-side.diff-add .diff-mk { color: var(--gi); }
+.diff-row.diff-add .diff-mk, .diff-side.diff-add .diff-mk { color: var(--gi); }
 .diff-row.diff-del, .diff-side.diff-del { background: var(--gd-bg); }
-.diff-row.diff-del .diff-code, .diff-side.diff-del .diff-mk { color: var(--gd); }
+.diff-row.diff-del .diff-mk, .diff-side.diff-del .diff-mk { color: var(--gd); }
 .diff-side.diff-blank { background: var(--bg2); }
 /* Split: deletions and additions paired side by side, each half its own mini-row. */
 .diff-row-pair { display: flex; }

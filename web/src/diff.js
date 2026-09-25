@@ -88,13 +88,13 @@ async function drawDiff(d, force = false) {
       d.diffReq = api('/api/diff', { path: d.path });
       const j = await d.diffReq;
       d.diffText = j.diff || '';
-      d.diffHunks = parseDiff(d.diffText);
+      d.diffHunks = j.hunks || parseDiff(d.diffText);
       // In a PR review session the server also splits the diff at the PR's
       // checked-out head commit: prDiff is the PR's own change (frozen since
       // checkout/last Pull), yourDiff is whatever the reviewer has edited or
       // committed locally since then. Undefined outside PR mode.
-      d.prDiffHunks = j.prDiff !== undefined ? parseDiff(j.prDiff) : undefined;
-      d.yourDiffHunks = j.yourDiff !== undefined ? parseDiff(j.yourDiff) : undefined;
+      d.prDiffHunks = j.prHunks !== undefined ? j.prHunks : (j.prDiff !== undefined ? parseDiff(j.prDiff) : undefined);
+      d.yourDiffHunks = j.yourHunks !== undefined ? j.yourHunks : (j.yourDiff !== undefined ? parseDiff(j.yourDiff) : undefined);
     } catch (e) {
       d.diffText = '';
       d.diffHunks = [];
@@ -305,7 +305,7 @@ function unifiedTable(hunk, reviewable = true) {
       lineCell(row.type === 'add' ? '' : row.oldLine, reviewable),
       lineCell(row.type === 'del' ? '' : row.newLine, reviewable),
       markerCell(row.type),
-      codeCell(row.text),
+      codeCell(row),
     );
     table.append(r);
   }
@@ -347,10 +347,10 @@ function pairRows(rows) {
 function splitSide(row, side, reviewable = true) {
   const el = document.createElement('div');
   el.className = 'diff-side diff-side-' + side + (row ? ' diff-' + row.type : ' diff-blank');
-  if (!row) { el.append(lineCell('', reviewable), markerCell(''), codeCell('')); return el; }
+  if (!row) { el.append(lineCell('', reviewable), markerCell(''), codeCell(null)); return el; }
   const ln = side === 'left' ? row.oldLine : row.newLine;
   anchor(el, row, reviewable);
-  el.append(lineCell(ln, reviewable), markerCell(row.type), codeCell(row.text));
+  el.append(lineCell(ln, reviewable), markerCell(row.type), codeCell(row));
   return el;
 }
 
@@ -396,10 +396,18 @@ function markerCell(type) {
   return el;
 }
 
-function codeCell(text) {
+function codeCell(arg) {
   const el = document.createElement('div');
   el.className = 'diff-code';
-  el.innerHTML = esc(text || '') || '&nbsp;';
+  if (!arg) {
+    el.innerHTML = '&nbsp;';
+    return el;
+  }
+  if (typeof arg === 'string') {
+    el.innerHTML = esc(arg) || '&nbsp;';
+    return el;
+  }
+  el.innerHTML = arg.html || esc(arg.text || '') || '&nbsp;';
   return el;
 }
 

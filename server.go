@@ -922,12 +922,18 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		uiStatus("info", "diff", fmt.Sprintf("%s · %s", rel, status), 0, os.Stdout)
 	}
 	avail := diff != ""
-	resp := map[string]any{"path": rel, "diff": diff}
+	resp := map[string]any{
+		"path":  rel,
+		"diff":  diff,
+		"hunks": highlightDiff(rel, diff),
+	}
 	if s.pr != nil {
 		prDiff := gitDiffBetween(s.ix.Root(), rel, s.diffBase, s.prHeadSHA)
 		yourDiff := gitDiffAgainst(s.ix.Root(), rel, s.prHeadSHA)
 		resp["prDiff"] = prDiff
 		resp["yourDiff"] = yourDiff
+		resp["prHunks"] = highlightDiff(rel, prDiff)
+		resp["yourHunks"] = highlightDiff(rel, yourDiff)
 		avail = avail || prDiff != "" || yourDiff != ""
 	}
 	resp["available"] = avail
