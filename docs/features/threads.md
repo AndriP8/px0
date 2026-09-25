@@ -9,6 +9,7 @@ Threads live in the right sidebar, on the **Threads** tab, next to References, S
 | Way | How |
 | --- | --- |
 | Selection | Select code and press `Alt+T`, click **Thread** in the footer selection bar, or right-click and choose **Start Thread**. |
+| Line | Click the thread icon that appears beside a line number and choose **Start Thread**. |
 | Current line | With nothing selected, `Alt+T` anchors the thread to the cursor line. |
 | Workspace | On the Threads tab, click **+ New**, or run **Threads: Start New Thread** from the palette. The thread is not tied to any file. |
 
@@ -29,6 +30,10 @@ Each message continues the same conversation, so "and what about the tests?" wor
 The **Model** row under the transcript is the same harness and model choice used everywhere else in px0. You can change it mid-thread: px0 starts a fresh session with the new harness and hands it the earlier transcript.
 
 There is no overlap guard. Threads and inline edits can run at the same time, on the same files, and the last write wins.
+
+## Inline Edits Are Threads Too
+
+[Inline edit](agent-editing.md) comment boxes live at the top of this same pane (the tab shows how many are waiting to be applied), so composing, applying and following up all happen in one place. An inline edit or batch you apply is recorded as a thread, labelled `inline` or `batch` in the list. Open it to read the agent's summary and the files it changed, or send a follow-up such as "also update the tests". These threads keep the overlap check inline edits have always had: an edit on lines another edit is still changing is refused. A conversation you start yourself is never blocked this way.
 
 ## The Thread List
 

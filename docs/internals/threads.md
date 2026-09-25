@@ -90,7 +90,17 @@ Because turns can overlap, a turn's `changed` list is what differed in the workt
 
 A turn is abandoned after 30 minutes (`threadTurnTimeout`). Stop cancels the process group; what it already wrote stays.
 
-## 6. HTTP Surface
+## 6. Inline and Batch Edits as Threads
+
+`/api/agent/edit` and `/api/agent/batch` call `StartEdit`. One item becomes a thread of kind `edit` anchored to that range; several become a thread of kind `batch`, whose first message lists every item with its snippet and instruction. The turn then runs exactly like any other.
+
+The edit UI polls `/api/agent/job?id=` and cancels through `/api/agent/cancel`, so threads present themselves in that shape. `threadManager.job` maps a turn to an `agentJob` (error text split into `error` and `stderr`, the reply as `stdout`), job ids come from the same sequence the agent manager uses (`nextJobID`), and the agent manager reaches the thread manager through the `threadJob` and `threadCancel` hooks. `Job(0)`, "the most recent job", returns the newer of the two kinds.
+
+Inline edits keep their overlap guard. `overlappingEdit` refuses an edit on lines a running edit thread still covers, with the same `409` and message as before. Conversations started from the Threads pane are not part of that check, in either direction.
+
+The first-turn prompt for these kinds asks for the change to be made and a one or two sentence summary, and a batch skips the single-anchor snippet because its message carries them.
+
+## 7. HTTP Surface
 
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
@@ -104,13 +114,13 @@ A turn is abandoned after 30 minutes (`threadTurnTimeout`). Stop cancels the pro
 
 Every mutating endpoint is guarded by `localPost`, and carries the same security posture as inline edits: it runs a general-purpose coding agent with shell access as the user who started px0.
 
-## 7. Frontend
+## 8. Frontend
 
 `thread.js` owns two views in the `#pane-right-threads` pane: the list and one thread (or a draft). `newThread(info)` is registered into `selbar.js` through `setThreadHandler`, the same one-way hook `agent.js` uses. The compose box's harness and model selects are registered with `registerAgentPicker` in `agent.js`, so they show and set the same global selection as every other picker.
 
 The list stream is opened once at startup and drives the running indicators and the tab reload. The per-thread stream is opened when a thread is opened and closed when leaving it. Replies are rendered by a small escape-first Markdown subset (`thrMd`): fences, inline code, bold and bullet lists, so a reply can never inject markup.
 
-## 8. Limits
+## 9. Limits
 
 - Only `claude` and `cursor-agent` resume natively. Others are replayed, and replay is capped at 16 KB of history.
 - Reply streaming is per assistant message, not per token.

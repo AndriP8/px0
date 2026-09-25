@@ -37,6 +37,7 @@ export function setReviewHandler(fn) { reviewHandler = fn; }
 export function getReviewHandler() { return reviewHandler; }
 
 let current = null;   // the selection the bar is showing, or null when it is not
+let pinnedInfo = null; // the line a gutter button opened the menu for; independent of any text selection
 let allText = null;   // Ctrl+A: promise of the S.selAll file's full text
 let allInfo = null;   // the bar's view of that selection, once the text arrives
 
@@ -132,7 +133,7 @@ function showSelectionBar(info) {
 }
 
 export function hideSelectionBar() {
-  closeSelMenu();
+  if (!pinnedInfo) closeSelMenu(); // a menu opened from the gutter is not tied to a selection
   if (!current) return;
   current = null;
   if (statsEl) statsEl.textContent = '';
@@ -186,8 +187,9 @@ export function copySelectAll() {
 
 /* Runs one of the bar's actions on the current selection. Returns false when the
    bar is not showing, so a shortcut can fall through to the browser. */
-export function runSelectionAction(act, triggerBtn = null) {
-  if (!current) {
+export function runSelectionAction(act, triggerBtn = null, override = null) {
+  const target = override || current;
+  if (!target) {
     if (act === 'thread') {
       const d = doc_();
       if (d && threadHandler) {
@@ -207,25 +209,25 @@ export function runSelectionAction(act, triggerBtn = null) {
     }
     return false;
   }
-  const { text, path } = current;
-  const ref = selectionRef(current);
+  const { text, path } = target;
+  const ref = selectionRef(target);
   const targetBtn = triggerBtn || $('#footer-sel [data-sel="' + act + '"]');
   if (act === 'copy-ref') {
     copyToClipboard(ref, 'Copied', targetBtn);
   } else if (act === 'copy-agent') {
     const ext = path.split('.').pop() || '';
-    const lineStr = current.l1 === current.l2 ? 'line ' + current.l1 : 'lines ' + current.l1 + '-' + current.l2;
+    const lineStr = target.l1 === target.l2 ? 'line ' + target.l1 : 'lines ' + target.l1 + '-' + target.l2;
     const snippet = '@' + path + ' ' + lineStr + '\n```' + ext + '\n' + text + '\n```';
     copyToClipboard(snippet, 'Copied', targetBtn);
   } else if (act === 'agent-edit') {
     if (!agentHandler) return false;
-    agentHandler(current);
+    agentHandler(target);
   } else if (act === 'thread') {
     if (!threadHandler) return false;
-    threadHandler(current);
+    threadHandler(target);
   } else if (act === 'review-comment') {
     if (!reviewHandler) return false;
-    reviewHandler(current);
+    reviewHandler(target);
   } else if (act === 'usages') {
     findReferences(text.split(/\s+/)[0] || text);
   } else {
@@ -239,23 +241,33 @@ export function runSelectionAction(act, triggerBtn = null) {
 const menu = $('#sel-menu');
 
 export function closeSelMenu() {
+  pinnedInfo = null;
   if (menu && !menu.hidden) menu.hidden = true;
+}
+
+/* The gutter's thread button: the same actions as the right-click menu, aimed
+   at one line. Find Usages needs a symbol, which a whole line is not, and
+   Add Review Comment only makes sense on a line GitHub knows about. */
+export function openLineMenu(info, x, y) {
+  closeSelMenu();
+  pinnedInfo = info;
+  openSelMenu(x, y, item => item.sel !== 'usages' && (item.sel !== 'review-comment' || !!info.fromDiff));
 }
 
 // Exported so pr.js can append "Add Review Comment" in a PR review session
 // without selbar needing to know PR review exists.
 export const SEL_MENU_ITEMS = [
+  { sel: 'thread', label: 'Start Thread', keys: 'Alt+T' },
+  { sel: 'agent-edit', label: 'Edit Inline', keys: 'Alt+E' },
   { sel: 'copy-ref', label: 'Copy Ref', keys: 'Alt+C' },
   { sel: 'copy-agent', label: 'Copy with Context', keys: 'Alt+A' },
-  { sel: 'agent-edit', label: 'Edit Inline', keys: 'Alt+E' },
-  { sel: 'thread', label: 'Start Thread', keys: 'Alt+T' },
   { sel: 'usages', label: 'Find Usages', keys: 'Alt+U' },
 ];
 
 /* Built from the selection actions each time, keeping Find Usages in context menu. */
-function openSelMenu(x, y) {
+function openSelMenu(x, y, keep = () => true) {
   menu.replaceChildren();
-  for (const item of SEL_MENU_ITEMS) {
+  for (const item of SEL_MENU_ITEMS.filter(keep)) {
     const btn = document.createElement('button');
     btn.className = 'sel-menu-item';
     btn.dataset.sel = item.sel;
@@ -303,8 +315,9 @@ export function initSelectionBar() {
     el.addEventListener('click', e => {
       const btn = e.target.closest('[data-sel]');
       if (!btn) return;
+      const info = pinnedInfo; // closing the menu forgets it
       closeSelMenu();
-      runSelectionAction(btn.dataset.sel, btn);
+      runSelectionAction(btn.dataset.sel, btn, info);
     });
   }
   if (!menu) return;

@@ -51,6 +51,8 @@ function thrDur(ms) {
    Everything is escaped first; only fences, inline code, bold and bullet lists
    are then recognised, so a reply can never inject markup. */
 function thrInline(s) {
+  const h = /^#{1,6}\s+(.*)$/.exec(s);
+  if (h) s = '**' + h[1] + '**';
   return esc(s).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
 }
 
@@ -108,7 +110,7 @@ function thrDrawList() {
   thrEl.list.innerHTML = items.map(t =>
     '<div class="thr-item' + (thr.cur && thr.cur.id === t.id ? ' sel' : '') + '" data-id="' + esc(t.id) + '" role="button" tabindex="0">' +
     '<div class="thr-item-title">' + (t.running ? '<span class="thr-spin" title="Working"></span>' : t.failed ? '<span class="thr-fail" title="Last reply failed">!</span>' : '') +
-    '<span>' + esc(t.title) + '</span></div>' +
+    '<span>' + esc(t.title) + '</span>' + (t.kind ? '<span class="thr-kind">' + (t.kind === 'batch' ? 'batch' : 'inline') + '</span>' : '') + '</div>' +
     '<div class="thr-item-meta"><span class="thr-item-ref">' + esc(thrRefText(t)) + '</span>' +
     '<span>' + t.turns + (t.turns === 1 ? ' turn' : ' turns') + ' · ' + thrAgo(t.updated) + '</span></div></div>').join('');
 }
@@ -365,6 +367,16 @@ export function initThreads() {
     thrDrawList();
   }));
   on('tab:activated', () => { if (thr.filter === 'file') thrDrawList(); });
+  // agent.js keeps its inline edit comments at the top of this pane and hands off here.
+  on('threads:reveal', () => showRightInspector('threads'));
+  on('threads:open', id => { if (id) openThread(id); });
+  on('threads:drafts', n => {
+    const c = $('#tab-threads .thr-tab-count');
+    if (!c) return;
+    c.hidden = !n;
+    c.textContent = n;
+    c.title = n + (n === 1 ? ' comment' : ' comments') + ' waiting to be applied';
+  });
   on('threads:shown', () => { if (!thr.cur && !thr.draft) thrShow('list'); thrDrawList(); });
 
   // Threads exist whenever a harness manager does; -no-agent removes them.

@@ -1,11 +1,10 @@
 // web/src/linecomment.js
-// Handles hovering on line numbers to show a pencil icon (✎), and tapping
-// it to trigger an inline AI edit on that line -- or, in a PR review
-// session's diff view, to draft a review comment there instead (Alt+R's
-// other entry point, and the one a reviewer actually reaches for first).
+// Handles hovering on line numbers to show a thread icon, and clicking it to
+// open the same actions menu as a right click on a selection, aimed at that
+// line: start a thread, edit inline, copy a reference, and (in a PR review
+// session's diff view) add a review comment.
 import { S, doc_ } from './state.js';
-import { openAgentEdit } from './agent.js';
-import { getReviewHandler } from './selbar.js';
+import { getReviewHandler, openLineMenu } from './selbar.js';
 
 export function initLineComment() {
   document.addEventListener('click', e => {
@@ -23,18 +22,16 @@ function handleLineBtnClick(btn) {
   if (!d) return;
 
   const diffRow = btn.closest('.diff-row, .diff-side');
+  const at = btn.getBoundingClientRect();
 
-  // In a PR review session, a diff line is for leaving a review comment --
-  // the button's own tooltip promises that, and it's what a reviewer wants
-  // most. AI edit stays reachable via selection + Alt+E either way. Rows
+  // On a line GitHub knows about in a PR review session the menu's review
+  // action needs the diff side, so build the richer description for it. Rows
   // marked non-reviewable (diff.js's "Your changes" section, i.e. edits the
-  // reviewer made locally since checkout) fall through to a plain inline
-  // edit instead: those lines aren't part of any commit GitHub knows about,
-  // so there's nothing a submitted review could attach a comment to.
-  if (diffRow) {
-    const reviewable = diffRow.dataset.reviewable !== '0';
-    const reviewHandler = S.meta?.pr && reviewable && getReviewHandler();
-    if (reviewHandler) { reviewHandler(diffLineInfo(diffRow, d.path)); return; }
+  // reviewer made locally since checkout) get a plain line instead: there is
+  // nothing a submitted review could attach a comment to.
+  if (diffRow && diffRow.dataset.reviewable !== '0' && S.meta?.pr && getReviewHandler()) {
+    openLineMenu(diffLineInfo(diffRow, d.path), at.right + 4, at.top);
+    return;
   }
 
   let line = 1;
@@ -50,7 +47,7 @@ function handleLineBtnClick(btn) {
     text = diffRow.querySelector('.diff-code')?.textContent || '';
   }
 
-  openAgentEdit({ path: d.path, l1: line, l2: line, text });
+  openLineMenu({ path: d.path, l1: line, l2: line, text }, at.right + 4, at.top);
 }
 
 // Mirrors selbar.js's diffSelection() for a single row instead of a range: a

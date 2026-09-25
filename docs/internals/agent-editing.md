@@ -9,6 +9,8 @@ This document describes the design and implementation of px0's editing flow:
 
 Harnesses are discovered automatically, the same way language servers are. Editing becomes available as soon as px0 finds one installed, but nothing ever runs until the user picks one, and that choice is remembered between runs. `-no-agent` removes the feature entirely; `-agent` pins a harness for scripted use and takes the choice away from the UI.
 
+> Inline and batch edits now run as [threads](threads.md). `/api/agent/edit` and `/api/agent/batch` call `threadManager.StartEdit`, which creates a thread (kind `edit` or `batch`), runs the first turn through the same harness argv, and returns an `agentJob`-shaped snapshot. `agentManager.Job` and `CancelJob` consult the thread manager through hooks, so `/api/agent/job` and `/api/agent/cancel` and the browser's polling are unchanged. The overlap guard in section 5 is enforced by `threadManager.overlappingEdit`, against running inline and batch edits only. `Start`, `StartBatch` and `run` remain for `StartPrompt` (commit messages).
+
 ## 1. The Dispatcher Model
 
 px0 does not author changes. No endpoint accepts file content; it composes a prompt and reloads whatever the harness wrote.

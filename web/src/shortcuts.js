@@ -182,7 +182,7 @@ export function initShortcuts() {
       return;
     }
 
-    if (mod && !e.shiftKey && !e.altKey && e.key === 'Enter') {
+    if (mod && e.shiftKey && !e.altKey && e.key === 'Enter') {
       const b = $('#agentbox');
       if (b && !b.hidden) {
         e.preventDefault();

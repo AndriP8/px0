@@ -431,7 +431,7 @@ body.side-hidden #side, body.side-hidden #resizer { display: none; }
 
 /* ---------- right-side inspector ---------- */
 #right-side {
-  width: 360px; flex: none; background: var(--bg2); border-left: 1px solid var(--line);
+  width: 384px; flex: none; background: var(--bg2); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; overflow: hidden;
 }
 body.right-hidden #right-side, body.right-hidden #right-resizer { display: none; }
@@ -442,7 +442,7 @@ body.right-hidden #right-side, body.right-hidden #right-resizer { display: none;
 }
 .inspector-tabs { display: flex; gap: 2px; min-width: 0; }
 .inspector-tab {
-  font-size: 12px; font-weight: 500; color: var(--faint); padding: 4px 7px; border-radius: var(--r);
+  font-size: 12px; font-weight: 500; color: var(--faint); padding: 4px 6px; border-radius: var(--r);
   white-space: nowrap; cursor: pointer; transition: color .1s, background .1s;
 }
 .inspector-tab:hover { color: var(--fg); background: var(--bg3); }
@@ -657,6 +657,12 @@ body.md-tab.diff-tab #tabs { padding-right: 290px; }
 .diff-side:hover .line-btn {
   opacity: 1;
   pointer-events: auto;
+}
+/* The thread (speech bubble) glyph, drawn as a mask so it takes the button's colour. */
+.line-btn::before {
+  content: ""; width: 10px; height: 10px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-5.4A8 8 0 1 1 21 12z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-5.4A8 8 0 1 1 21 12z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 .line-btn:hover {
   opacity: 1 !important;
@@ -1034,22 +1040,22 @@ kbd {
 #findbar button { width: 22px; height: 22px; border-radius: var(--r); color: var(--dim); display: grid; place-items: center; font-size: 12px; }
 #findbar button:hover { background: var(--bg4); color: var(--fg); }
 
-/* ---------- agent edit composer ----------
-   #agentbox stacks boxes from top to bottom,
-   with the batch bar at the top followed by comments. */
+/* ---------- inline edit comments ----------
+   #agentbox sits at the top of the Threads pane in the right sidebar: the batch
+   bar first, then one box per comment. It takes the space it needs, up to
+   half the pane, and scrolls beyond that. */
 #agentbox {
-  position: absolute; top: 10px; right: 22px; z-index: 22; width: 380px; max-width: calc(100% - 32px);
-  display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 44px);
-}
-#editor:has(#findbar:not([hidden])) #agentbox {
-  top: 46px;
+  flex: none; display: flex; flex-direction: column; gap: 8px;
+  padding: 8px 10px; max-height: 55%; overflow-y: auto;
+  border-bottom: 1px solid var(--line); background: var(--bg2);
 }
 #agentbox[hidden] { display: none; }
-.agentbox-list {
-  display: flex; flex-direction: column; gap: 8px;
-  overflow-y: auto; max-height: calc(100vh - 160px);
-  padding: 2px 2px 2px 0;
+.agentbox-list { display: flex; flex-direction: column; gap: 8px; }
+.thr-tab-count {
+  margin-left: 5px; font: 600 10px/1 var(--mono); color: var(--on-accent); background: var(--accent);
+  border-radius: 8px; padding: 2px 5px; vertical-align: middle;
 }
+.thr-tab-count[hidden] { display: none; }
 
 /* ---------- PR review comment composers ----------
    Unlike #agentbox's fixed top-right stack, each box here is pinned beside
@@ -1164,6 +1170,27 @@ kbd {
 .agent-model-select:disabled {
   opacity: .5; cursor: default;
 }
+
+.agent-now {
+  padding: 3px 9px; border-radius: var(--r); font: 11px var(--ui); font-weight: 600;
+  background: transparent; border: 1px solid var(--line); color: var(--fg); cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.agent-now:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-fg); }
+.agent-now[hidden], .agent-send[hidden], .agent-cancel[hidden] { display: none; }
+.agent-foot .agent-hint { flex: 1; min-width: 0; }
+/* A comment that has been added to the batch shows as one line. */
+.agent-queued {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  font: 12px var(--mono); color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: var(--r); padding: 4px 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-queued:hover { border-color: var(--accent); }
+.agent-box.busy .agent-queued { opacity: .65; cursor: default; }
+.agent-queued[hidden] { display: none; }
+.agent-box.queued .agent-compose, .agent-box.queued .agent-meta { display: none; }
+.agent-box.shake { animation: shake .3s ease; }
 
 .agent-input {
   width: 100%; resize: vertical; min-height: 54px;
@@ -2368,6 +2395,10 @@ body.hide-git-gutter .g-git, body.hide-git-gutter [class*="git-"] { display: non
   border: 2px solid var(--line); border-top-color: var(--accent); animation: thrspin .8s linear infinite;
 }
 @keyframes thrspin { to { transform: rotate(360deg); } }
+.thr-kind {
+  flex: none; margin-left: auto; font: 600 9.5px/1 var(--mono); text-transform: uppercase; letter-spacing: .04em;
+  color: var(--faint); border: 1px solid var(--line); border-radius: var(--r); padding: 2px 4px;
+}
 .thr-fail { flex: none; color: var(--err); font-weight: 700; }
 .thr-anchor {
   padding: 5px 12px; border-bottom: 1px solid var(--line); font: 11px var(--mono); color: var(--faint);

@@ -68,6 +68,7 @@ type threadTurn struct {
 type thread struct {
 	ID             string        `json:"id"`
 	Title          string        `json:"title"`
+	Kind           string        `json:"kind,omitempty"` // "edit" or "batch" when started from inline edits; empty for a conversation
 	Path           string        `json:"path,omitempty"`
 	L1             int           `json:"l1,omitempty"`
 	L2             int           `json:"l2,omitempty"`
@@ -82,6 +83,7 @@ type thread struct {
 
 type threadSummary struct {
 	ID      string `json:"id"`
+	Kind    string `json:"kind,omitempty"`
 	Title   string `json:"title"`
 	Path    string `json:"path,omitempty"`
 	L1      int    `json:"l1,omitempty"`
@@ -113,6 +115,7 @@ type threadManager struct {
 	mu       sync.Mutex
 	threads  map[string]*thread
 	cancels  map[string]context.CancelFunc // one running turn per thread
+	jobs     map[int64]*threadJobRef       // inline/batch edits, polled as agent jobs
 	subs     map[string]map[chan threadEvent]struct{}
 	lastSave time.Time
 }
@@ -135,9 +138,12 @@ func newThreadManager(a *agentManager, root string) *threadManager {
 		file:    threadStorePath(root),
 		threads: map[string]*thread{},
 		cancels: map[string]context.CancelFunc{},
+		jobs:    map[int64]*threadJobRef{},
 		subs:    map[string]map[chan threadEvent]struct{}{},
 	}
 	tm.load()
+	a.threadJob = tm.job
+	a.threadCancel = tm.cancelJob
 	return tm
 }
 
@@ -232,7 +238,7 @@ func (t *thread) running() bool {
 }
 
 func (t *thread) summary() threadSummary {
-	s := threadSummary{ID: t.ID, Title: t.Title, Path: t.Path, L1: t.L1, L2: t.L2, Updated: t.Updated, Turns: len(t.Turns), Running: t.running()}
+	s := threadSummary{ID: t.ID, Kind: t.Kind, Title: t.Title, Path: t.Path, L1: t.L1, L2: t.L2, Updated: t.Updated, Turns: len(t.Turns), Running: t.running()}
 	if n := len(t.Turns); n > 0 && !s.Running {
 		last := t.Turns[n-1]
 		s.Failed = last.Error != ""
@@ -297,12 +303,7 @@ func (tm *threadManager) Create(abs, rel string, l1, l2 int, message string) (*t
 			l2 = l1
 		}
 		t.L1, t.L2 = l1, l2
-		if snip, err := readLineRange(abs, l1, l2); err == nil {
-			if len(snip) > threadSnippetMax {
-				snip = snip[:threadSnippetMax] + "\n…"
-			}
-			t.Snippet = snip
-		}
+		t.Snippet = anchorSnippet(abs, l1, l2)
 	}
 	tm.mu.Lock()
 	tm.threads[t.ID] = t
@@ -351,10 +352,17 @@ func threadArgv(name string, template []string, sessionID string, resume bool) [
 func threadPrompt(t *thread, prior []*threadTurn, message string, replay bool) string {
 	var b strings.Builder
 	if len(prior) == 0 || replay {
-		b.WriteString("You are helping with a long-running conversation about the code in this workspace. ")
-		b.WriteString("You may read any file and edit any file needed to carry out what is asked; make edits directly. ")
-		b.WriteString("When you finish a request, reply with a concise summary: what you found or changed, and in which files.\n\n")
-		if t.Path != "" {
+		if t.Kind == "edit" || t.Kind == "batch" {
+			b.WriteString("Carry out the edit request below by editing files in place. ")
+			b.WriteString("Change only what it asks for; you may touch other files if the change needs it. ")
+			b.WriteString("When done, reply in a sentence or two saying what you changed and in which files. ")
+			b.WriteString("The user may follow up in this conversation.\n\n")
+		} else {
+			b.WriteString("You are helping with a long-running conversation about the code in this workspace. ")
+			b.WriteString("You may read any file and edit any file needed to carry out what is asked; make edits directly. ")
+			b.WriteString("When you finish a request, reply with a concise summary: what you found or changed, and in which files.\n\n")
+		}
+		if t.Path != "" && t.Kind != "batch" { // a batch carries its own snippets
 			ext := strings.TrimPrefix(filepath.Ext(t.Path), ".")
 			lineStr := fmt.Sprintf("lines %d-%d", t.L1, t.L2)
 			if t.L1 == t.L2 {
@@ -378,6 +386,9 @@ func threadPrompt(t *thread, prior []*threadTurn, message string, replay bool) s
 		b.WriteString("### Earlier in this conversation\n")
 		b.WriteString(hist)
 		b.WriteString("### Current request\n")
+	}
+	if t.Kind == "edit" && len(prior) == 0 {
+		b.WriteString("### Instruction\n")
 	}
 	b.WriteString(message)
 	return b.String()
@@ -1004,4 +1015,179 @@ func (s *Server) handleThreadStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// ---------------------------------------------------------------- inline edits
+
+// threadJobRef ties an agent-style job id, which the inline and batch edit UI
+// polls, to the thread turn doing the work.
+type threadJobRef struct {
+	tid   string
+	turn  int
+	items []agentBatchItem
+}
+
+// StartEdit runs inline and batch edits as a thread, so every edit leaves a
+// transcript that can be followed up. It keeps the guarantee those flows have
+// always had: an edit on lines another edit is still changing is refused.
+// Conversations started from the Threads pane are never guarded this way.
+func (tm *threadManager) StartEdit(items []agentBatchItem) (*agentJob, error) {
+	if len(items) == 0 {
+		return nil, errors.New("no edits specified")
+	}
+	for i := range items {
+		items[i].Instruction = strings.TrimSpace(items[i].Instruction)
+		if items[i].Instruction == "" {
+			return nil, errors.New("instruction is empty")
+		}
+		if items[i].L1 < 1 {
+			items[i].L1 = 1
+		}
+		if items[i].L2 < items[i].L1 {
+			items[i].L2 = items[i].L1
+		}
+		for j := 0; j < i; j++ {
+			if items[i].Path == items[j].Path && items[i].L1 <= items[j].L2 && items[j].L1 <= items[i].L2 {
+				return nil, fmt.Errorf("overlapping edits in batch on %s (%s and %s)", items[i].Path, lineRef(items[i].L1, items[i].L2), lineRef(items[j].L1, items[j].L2))
+			}
+		}
+	}
+
+	if busy := tm.overlappingEdit(items); busy != "" {
+		uiStatus("warn", "agent", "edit dispatch refused: "+busy, 0, os.Stdout)
+		return nil, fmt.Errorf("%w: %s", errAgentBusy, busy)
+	}
+
+	t := &thread{ID: newThreadID(), Created: time.Now().UnixMilli()}
+	t.Updated = t.Created
+	var message string
+	if len(items) == 1 {
+		it := items[0]
+		t.Kind, t.Path, t.L1, t.L2 = "edit", it.Path, it.L1, it.L2
+		t.Snippet = anchorSnippet(it.Abs, it.L1, it.L2)
+		t.Title = "Edit: " + threadTitle(it.Instruction)
+		message = it.Instruction
+	} else {
+		t.Kind, t.Path, t.L1, t.L2 = "batch", items[0].Path, items[0].L1, items[0].L2
+		t.Title = fmt.Sprintf("Batch edit: %d changes", len(items))
+		var b strings.Builder
+		fmt.Fprintf(&b, "Apply these %d edits together.\n\n", len(items))
+		for i, it := range items {
+			snip, err := readLineRange(it.Abs, it.L1, it.L2)
+			if err != nil {
+				return nil, err
+			}
+			if len(snip) > threadSnippetMax {
+				snip = snip[:threadSnippetMax] + "\n…"
+			}
+			fmt.Fprintf(&b, "### Edit %d: @%s %s\n```%s\n%s\n```\n%s\n\n", i+1, it.Path, lineRef(it.L1, it.L2),
+				strings.TrimPrefix(filepath.Ext(it.Path), "."), snip, it.Instruction)
+		}
+		message = strings.TrimSpace(b.String())
+	}
+
+	tm.mu.Lock()
+	tm.threads[t.ID] = t
+	tm.mu.Unlock()
+	if _, err := tm.Send(t.ID, message); err != nil {
+		tm.mu.Lock()
+		delete(tm.threads, t.ID)
+		tm.mu.Unlock()
+		return nil, err
+	}
+	id := tm.agent.nextJobID()
+	tm.mu.Lock()
+	tm.jobs[id] = &threadJobRef{tid: t.ID, turn: 1, items: items}
+	tm.mu.Unlock()
+	return tm.job(id), nil
+}
+
+// overlappingEdit describes an edit still running on lines these items touch,
+// or returns "" when there is none.
+func (tm *threadManager) overlappingEdit(items []agentBatchItem) string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	for id, ref := range tm.jobs {
+		t := tm.threads[ref.tid]
+		if t == nil || !t.running() {
+			continue
+		}
+		for _, run := range ref.items {
+			for _, it := range items {
+				if run.Path == it.Path && it.L1 <= run.L2 && run.L1 <= it.L2 {
+					return fmt.Sprintf("an edit is already running on %s:%s (job #%d with %s)", it.Path, lineRef(it.L1, it.L2), id, t.Turns[len(t.Turns)-1].Harness)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// job presents an inline or batch edit's turn in the shape the edit UI polls.
+// id 0 means the most recent one.
+func (tm *threadManager) job(id int64) *agentJob {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	if id == 0 {
+		for cand := range tm.jobs {
+			if cand > id {
+				id = cand
+			}
+		}
+	}
+	ref := tm.jobs[id]
+	if ref == nil {
+		return nil
+	}
+	t := tm.threads[ref.tid]
+	if t == nil || ref.turn > len(t.Turns) {
+		return nil
+	}
+	turn := t.Turns[ref.turn-1]
+	j := &agentJob{
+		ID: id, ThreadID: t.ID, Harness: turn.Harness, Path: ref.items[0].Path, Lines: lineRef(ref.items[0].L1, ref.items[0].L2),
+		Running: turn.Running, Log: turn.Reply, Stdout: turn.Reply,
+		Changed: append([]string{}, turn.Changed...), Ms: turn.Ms, Tracked: turn.Tracked,
+	}
+	if len(ref.items) > 1 {
+		j.BatchCount, j.Items = len(ref.items), ref.items
+	}
+	if turn.Running {
+		j.Ms = time.Now().UnixMilli() - turn.Started
+	}
+	if turn.Error != "" {
+		first, rest, _ := strings.Cut(turn.Error, "\n")
+		j.Error, j.Stderr = first, rest
+	}
+	return j
+}
+
+// cancelJob stops the edit with this job id, or every running edit for id 0.
+func (tm *threadManager) cancelJob(id int64) bool {
+	tm.mu.Lock()
+	var tids []string
+	for jid, ref := range tm.jobs {
+		if id == 0 || jid == id {
+			tids = append(tids, ref.tid)
+		}
+	}
+	tm.mu.Unlock()
+	cancelled := false
+	for _, tid := range tids {
+		if tm.Cancel(tid) {
+			cancelled = true
+		}
+	}
+	return cancelled
+}
+
+func anchorSnippet(abs string, l1, l2 int) string {
+	snip, err := readLineRange(abs, l1, l2)
+	if err != nil {
+		return ""
+	}
+	if len(snip) > threadSnippetMax {
+		snip = snip[:threadSnippetMax] + "\n…"
+	}
+	return snip
 }

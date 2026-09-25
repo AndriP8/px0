@@ -209,3 +209,61 @@ func TestThreadInterruptedTurnIsClosedOnLoad(t *testing.T) {
 		t.Fatalf("interrupted turn = %+v", got)
 	}
 }
+
+func TestInlineEditRunsAsThread(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n\nfunc A() {}\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "b.go"), []byte("package b\n\nfunc B() {}\n"), 0o644)
+	h := writeHarness(t, `printf 'did it\n'`)
+	s := agentServer(t, root, h)
+
+	code, m := agentPostJSON(t, s, "/api/agent/batch", map[string]any{"edits": []map[string]any{
+		{"path": "a.go", "l1": 3, "l2": 3, "instruction": "rename A"},
+		{"path": "b.go", "l1": 3, "l2": 3, "instruction": "rename B"},
+	}})
+	if code != 200 {
+		t.Fatalf("batch = %d %v", code, m)
+	}
+	id := int64(m["id"].(float64))
+	job := waitIdleID(t, s, id)
+	if job.Error != "" || job.BatchCount != 2 || !strings.Contains(job.Stdout, "did it") {
+		t.Fatalf("job = %+v", job)
+	}
+
+	list := s.threads.List()
+	if len(list) != 1 || list[0].Kind != "batch" || list[0].Title != "Batch edit: 2 changes" {
+		t.Fatalf("threads = %+v", list)
+	}
+	th := s.threads.Get(list[0].ID)
+	if p := th.Turns[0].Prompt; !strings.Contains(p, "rename A") || !strings.Contains(p, "@b.go") {
+		t.Fatalf("batch prompt should carry every instruction and snippet: %q", p)
+	}
+	// The thread can be followed up like any conversation.
+	if code, _ := agentPostJSON(t, s, "/api/threads/send", map[string]any{"id": th.ID, "message": "why?"}); code != 200 {
+		t.Fatalf("follow-up = %d", code)
+	}
+	waitThreadIdle(t, s, th.ID)
+}
+
+func TestInlineEditOverlapStillRefused(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n\nfunc A() {}\n"), 0o644)
+	s := agentServer(t, root, writeHarness(t, "sleep 30"))
+	q := "/api/agent/edit?path=a.go&l1=3&l2=3&instruction=one"
+	if code, _ := agentPost(t, s, q); code != 200 {
+		t.Fatalf("first edit = %d", code)
+	}
+	if code, _ := agentPost(t, s, "/api/agent/edit?path=a.go&l1=2&l2=4&instruction=two"); code != 409 {
+		t.Fatalf("overlapping edit = %d, want 409", code)
+	}
+	// A conversation is never guarded the way an edit is.
+	if code, _ := agentPostJSON(t, s, "/api/threads/create", map[string]any{"path": "a.go", "l1": 3, "l2": 3, "message": "hi"}); code != 200 {
+		t.Fatalf("thread on the same lines = %d, want 200", code)
+	}
+	s.agent.Cancel()
+	s.threads.Close()
+	// Let the cancelled turns finish saving before the temp dir goes away.
+	for _, sum := range s.threads.List() {
+		waitThreadIdle(t, s, sum.ID)
+	}
+}

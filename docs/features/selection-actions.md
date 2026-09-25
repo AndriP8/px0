@@ -55,6 +55,10 @@ px0 automatically normalizes diff selections:
 | **Edit with Agent** | `Alt+E` | Right-Click | `[Edit Agent]` | Opens agent edit composer |
 | **Start Thread** | `Alt+T` | Right-Click | `[Thread]` | Opens a long-running conversation anchored to the selection |
 
+### Line Actions
+
+Hovering a line number shows a thread icon. Clicking it opens the same menu as a right click, aimed at that line: Start Thread, Edit Inline, Copy Ref and Copy with Context (plus Add Review Comment on a pull request diff line).
+
 ---
 
 ## Non-Intrusive Ergonomics

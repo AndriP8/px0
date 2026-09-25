@@ -380,8 +380,7 @@ function lineCell(n, reviewable = true) {
     const btn = document.createElement('span');
     btn.className = 'line-btn';
     btn.setAttribute('role', 'button');
-    btn.title = (S.meta?.pr && reviewable) ? 'Add review comment' : 'Edit inline';
-    btn.textContent = '✎';
+    btn.title = (S.meta?.pr && reviewable) ? 'Thread, review comment and line actions' : 'Thread and line actions';
     el.append(btn);
   }
   el.append(document.createTextNode(n === '' || n === undefined ? '' : String(n)));
