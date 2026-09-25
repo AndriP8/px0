@@ -26,6 +26,38 @@ func TestParseClaudeEvent(t *testing.T) {
 	}
 }
 
+func TestParseAgyEvent(t *testing.T) {
+	if evs := parseAgyEvent(`{"event":"init","conversation_id":"c123"}`); len(evs) != 1 || evs[0].kind != "session" || evs[0].text != "c123" {
+		t.Fatalf("agy init = %+v", evs)
+	}
+	toolLine := `{"event":"step_update","step_update":{"step_type":"tool","tool_name":"view_file","state":"ACTIVE","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/path/file.go"}}}}`
+	if evs := parseAgyEvent(toolLine); len(evs) != 1 || evs[0].kind != "tool" || evs[0].text != "view_file /path/file.go" {
+		t.Fatalf("agy tool = %+v", evs)
+	}
+	deltaLine := `{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"hello world"}}`
+	if evs := parseAgyEvent(deltaLine); len(evs) != 1 || evs[0].kind != "text" || evs[0].text != "hello world" {
+		t.Fatalf("agy delta = %+v", evs)
+	}
+	resLine := `{"event":"result","result":{"status":"SUCCESS","response":"done"}}`
+	if evs := parseAgyEvent(resLine); len(evs) != 1 || evs[0].kind != "result" || evs[0].text != "done" {
+		t.Fatalf("agy result = %+v", evs)
+	}
+}
+
+func TestParseGeminiEvent(t *testing.T) {
+	if evs := parseGeminiEvent(`{"type":"init","session_id":"s456"}`); len(evs) != 1 || evs[0].kind != "session" || evs[0].text != "s456" {
+		t.Fatalf("gemini init = %+v", evs)
+	}
+	toolLine := `{"type":"tool_use","tool_name":"read_file","parameters":{"file_path":"b.go"}}`
+	if evs := parseGeminiEvent(toolLine); len(evs) != 1 || evs[0].kind != "tool" || evs[0].text != "read_file b.go" {
+		t.Fatalf("gemini tool = %+v", evs)
+	}
+	msgLine := `{"type":"message","role":"assistant","content":"thinking...","delta":true}`
+	if evs := parseGeminiEvent(msgLine); len(evs) != 1 || evs[0].kind != "text" || evs[0].text != "thinking..." {
+		t.Fatalf("gemini message = %+v", evs)
+	}
+}
+
 func TestThreadArgv(t *testing.T) {
 	tpl := []string{"/bin/claude", "--permission-mode", "acceptEdits", "-p", "{prompt}"}
 	first := strings.Join(threadArgv("claude", tpl, "U", false), " ")

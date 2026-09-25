@@ -305,6 +305,9 @@
     <!-- Selection context menu: the footer's selection actions, at the pointer -->
     <div id="sel-menu" role="menu" hidden></div>
 
+    <!-- Tree context menu: file & folder actions on the left sidebar -->
+    <div id="tree-menu" role="menu" hidden></div>
+
     <!-- Metrics menu, opened from CPU/RAM status bar -->
     <div id="metrics-menu" role="menu" hidden></div>
 
@@ -451,7 +454,7 @@
             <button class="opt on" data-thr-filter="all" title="Every thread in this workspace">All</button>
             <button class="opt" data-thr-filter="file" title="Threads started in the open file">This file</button>
           </span>
-          <button id="thr-new" class="opt" title="Start a thread about the workspace or the selection">+ New</button>
+          <button id="thr-new" class="thr-btn-primary" title="Start a thread about the workspace or the selection">+ New</button>
         </div>
         <div class="panel-body" id="thr-list"></div>
       </div>

@@ -318,7 +318,9 @@ func (tm *threadManager) Create(abs, rel string, l1, l2 int, message string) (*t
 }
 
 // threadNative reports whether px0 can hand this harness its own session.
-func threadNative(name string) bool { return name == "claude" || name == "cursor-agent" }
+func threadNative(name string) bool {
+	return name == "claude" || name == "cursor-agent" || name == "agy" || name == "gemini"
+}
 
 // threadArgv adds the session and output flags a thread turn needs to the
 // harness's headless argv. Flag order does not matter to these CLIs, so the
@@ -337,6 +339,18 @@ func threadArgv(name string, template []string, sessionID string, resume bool) [
 	case "cursor-agent":
 		if sessionID != "" {
 			extra = []string{"--resume", sessionID}
+		}
+	case "agy":
+		extra = []string{"--output-format", "stream-json"}
+		if resume && sessionID != "" {
+			extra = append(extra, "--conversation", sessionID)
+		}
+	case "gemini":
+		extra = []string{"--output-format", "stream-json"}
+		if resume && sessionID != "" {
+			extra = append(extra, "--resume", sessionID)
+		} else if sessionID != "" {
+			extra = append(extra, "--session-id", sessionID)
 		}
 	}
 	out := make([]string, 0, len(template)+len(extra))
@@ -492,19 +506,19 @@ func (tm *threadManager) runTurn(ctx context.Context, cancel context.CancelFunc,
 
 	if sessionID == "" {
 		switch r.name {
-		case "claude":
+		case "claude", "gemini":
 			sessionID = newUUID()
 		case "cursor-agent":
 			sessionID = tm.createCursorChat(ctx, r.base[0])
 		}
 	}
-	native := threadNative(r.name) && sessionID != ""
+	native := threadNative(r.name) && (sessionID != "" || r.name == "agy")
 	// Only a session the harness really started remembers the conversation.
 	// Anything else, including a session whose first turn failed, is replayed.
 	replay := len(r.prior) > 0 && !(native && live)
 
 	tm.mu.Lock()
-	if t := tm.threads[r.tid]; t != nil && native {
+	if t := tm.threads[r.tid]; t != nil && native && sessionID != "" {
 		t.SessionID = sessionID
 	}
 	tm.mu.Unlock()
@@ -512,7 +526,7 @@ func (tm *threadManager) runTurn(ctx context.Context, cancel context.CancelFunc,
 	prompt := threadPrompt(t, r.prior, r.message, replay)
 	argv := r.base
 	if native {
-		argv = threadArgv(r.name, r.base, sessionID, r.name == "claude" && live)
+		argv = threadArgv(r.name, r.base, sessionID, live)
 	}
 	args := make([]string, len(argv))
 	for i, tok := range argv {
@@ -526,7 +540,7 @@ func (tm *threadManager) runTurn(ctx context.Context, cancel context.CancelFunc,
 	before := worktreeSnapshot(tm.root)
 	started := time.Now()
 	stderr := &tailBuffer{max: agentLogBytes}
-	sink := &threadSink{tm: tm, tid: r.tid, turn: r.turn, claude: r.name == "claude"}
+	sink := &threadSink{tm: tm, tid: r.tid, turn: r.turn, harness: r.name}
 
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = tm.root
@@ -555,7 +569,10 @@ func (tm *threadManager) runTurn(ctx context.Context, cancel context.CancelFunc,
 
 	tm.mu.Lock()
 	if t := tm.threads[r.tid]; t != nil {
-		if (r.name == "claude" && sink.started) || (r.name == "cursor-agent" && native && err == nil) {
+		if t.SessionID == "" && sink.sessionID != "" {
+			t.SessionID = sink.sessionID
+		}
+		if (sink.started && (r.name == "claude" || r.name == "agy" || r.name == "gemini")) || (r.name == "cursor-agent" && native && err == nil) {
 			t.SessionLive = true
 		}
 		r.turn.Running = false
@@ -626,17 +643,18 @@ func (tm *threadManager) Close() {
 // ---------------------------------------------------------------- output
 
 // threadSink turns a harness's stdout into the turn's reply as it arrives.
-// claude speaks stream-json, one event per line, from which the assistant's
-// text and a one-line note per tool call are pulled. Anything else is treated
-// as the reply itself, line by line.
+// claude, agy, and gemini speak stream-json, one event per line, from which the
+// assistant's text deltas and tool calls are pulled and streamed live to the UI.
+// Anything else is treated as the reply itself, line by line.
 type threadSink struct {
-	tm      *threadManager
-	tid     string
-	turn    *threadTurn
-	claude  bool
-	buf     []byte
-	started bool   // claude reported a session id, so --resume will work next
-	failure string // claude's own error result
+	tm        *threadManager
+	tid       string
+	turn      *threadTurn
+	harness   string
+	buf       []byte
+	started   bool   // harness reported a session id, so --resume will work next
+	sessionID string // session id discovered from stream
+	failure   string // harness's own error result
 }
 
 func (s *threadSink) Write(p []byte) (int, error) {
@@ -661,24 +679,40 @@ func (s *threadSink) flush() {
 }
 
 func (s *threadSink) line(l string) {
-	if !s.claude {
+	switch s.harness {
+	case "claude":
+		for _, ev := range parseClaudeEvent(l) {
+			s.handleEvent(ev)
+		}
+	case "agy":
+		for _, ev := range parseAgyEvent(l) {
+			s.handleEvent(ev)
+		}
+	case "gemini":
+		for _, ev := range parseGeminiEvent(l) {
+			s.handleEvent(ev)
+		}
+	default:
 		s.text(l+"\n", false)
-		return
 	}
-	for _, ev := range parseClaudeEvent(l) {
-		switch ev.kind {
-		case "session":
-			s.started = true
-		case "text":
+}
+
+func (s *threadSink) handleEvent(ev claudeEvent) {
+	switch ev.kind {
+	case "session":
+		s.started = true
+		if ev.text != "" {
+			s.sessionID = ev.text
+		}
+	case "text":
+		s.text(ev.text, ev.block)
+	case "tool":
+		s.tool(ev.text)
+	case "error":
+		s.failure = ev.text
+	case "result":
+		if strings.TrimSpace(s.reply()) == "" {
 			s.text(ev.text, true)
-		case "tool":
-			s.tool(ev.text)
-		case "error":
-			s.failure = ev.text
-		case "result":
-			if strings.TrimSpace(s.reply()) == "" {
-				s.text(ev.text, true)
-			}
 		}
 	}
 }
@@ -723,8 +757,9 @@ func (tm *threadManager) maybeSaveLocked() {
 }
 
 type claudeEvent struct {
-	kind string // session | text | tool | result | error
-	text string
+	kind  string // session | text | tool | result | error
+	text  string
+	block bool
 }
 
 // parseClaudeEvent reads one line of `claude --output-format stream-json`.
@@ -762,7 +797,7 @@ func parseClaudeEvent(line string) []claudeEvent {
 			switch c.Type {
 			case "text":
 				if strings.TrimSpace(c.Text) != "" {
-					out = append(out, claudeEvent{kind: "text", text: c.Text})
+					out = append(out, claudeEvent{kind: "text", text: c.Text, block: true})
 				}
 			case "tool_use":
 				out = append(out, claudeEvent{kind: "tool", text: toolLabel(c.Name, c.Input)})
@@ -782,12 +817,122 @@ func parseClaudeEvent(line string) []claudeEvent {
 	return out
 }
 
+// parseAgyEvent reads one line of `agy --output-format stream-json`.
+func parseAgyEvent(line string) []claudeEvent {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "{") {
+		return nil
+	}
+	var ev struct {
+		Event          string `json:"event"`
+		ConversationID string `json:"conversation_id"`
+		StepUpdate     *struct {
+			StepType string `json:"step_type"`
+			State    string `json:"state"`
+			ToolName string `json:"tool_name"`
+			ToolInfo *struct {
+				Name       string          `json:"name"`
+				Parameters json.RawMessage `json:"parameters"`
+			} `json:"tool_info"`
+			TextDelta string `json:"text_delta"`
+		} `json:"step_update"`
+		Result *struct {
+			Status   string `json:"status"`
+			Response string `json:"response"`
+			Error    string `json:"error"`
+		} `json:"result"`
+	}
+	if json.Unmarshal([]byte(line), &ev) != nil {
+		return nil
+	}
+	var out []claudeEvent
+	if ev.Event == "init" && ev.ConversationID != "" {
+		out = append(out, claudeEvent{kind: "session", text: ev.ConversationID})
+	}
+	if ev.Event == "step_update" && ev.StepUpdate != nil {
+		su := ev.StepUpdate
+		switch su.StepType {
+		case "tool":
+			if su.State == "ACTIVE" || su.State == "" {
+				name := su.ToolName
+				var params json.RawMessage
+				if su.ToolInfo != nil {
+					if su.ToolInfo.Name != "" {
+						name = su.ToolInfo.Name
+					}
+					params = su.ToolInfo.Parameters
+				}
+				out = append(out, claudeEvent{kind: "tool", text: toolLabel(name, params)})
+			}
+		case "agent_response":
+			if su.TextDelta != "" {
+				out = append(out, claudeEvent{kind: "text", text: su.TextDelta, block: false})
+			}
+		}
+	}
+	if ev.Event == "result" && ev.Result != nil {
+		r := ev.Result
+		if r.Status != "" && r.Status != "SUCCESS" {
+			errText := r.Error
+			if errText == "" {
+				errText = "the harness reported an error"
+			}
+			out = append(out, claudeEvent{kind: "error", text: errText})
+		} else if strings.TrimSpace(r.Response) != "" {
+			out = append(out, claudeEvent{kind: "result", text: r.Response})
+		}
+	}
+	return out
+}
+
+// parseGeminiEvent reads one line of `gemini --output-format stream-json`.
+func parseGeminiEvent(line string) []claudeEvent {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "{") {
+		return nil
+	}
+	var ev struct {
+		Type       string          `json:"type"`
+		SessionID  string          `json:"session_id"`
+		Role       string          `json:"role"`
+		Content    string          `json:"content"`
+		Delta      bool            `json:"delta"`
+		ToolName   string          `json:"tool_name"`
+		Parameters json.RawMessage `json:"parameters"`
+		Status     string          `json:"status"`
+		Error      string          `json:"error"`
+	}
+	if json.Unmarshal([]byte(line), &ev) != nil {
+		return nil
+	}
+	var out []claudeEvent
+	if ev.Type == "init" && ev.SessionID != "" {
+		out = append(out, claudeEvent{kind: "session", text: ev.SessionID})
+	}
+	if ev.Type == "tool_use" {
+		out = append(out, claudeEvent{kind: "tool", text: toolLabel(ev.ToolName, ev.Parameters)})
+	}
+	if ev.Type == "message" && ev.Role == "assistant" && ev.Content != "" {
+		out = append(out, claudeEvent{kind: "text", text: ev.Content, block: false})
+	}
+	if ev.Type == "result" {
+		if ev.Status != "" && ev.Status != "success" {
+			errText := ev.Error
+			if errText == "" {
+				errText = "gemini reported an error"
+			}
+			out = append(out, claudeEvent{kind: "error", text: errText})
+		}
+	}
+	return out
+}
+
 // toolLabel is "Edit server.go" or "Bash go test ./...": the tool and the one
 // argument that says what it acted on.
 func toolLabel(name string, input json.RawMessage) string {
 	var in map[string]any
 	json.Unmarshal(input, &in)
-	for _, k := range []string{"file_path", "path", "command", "pattern", "url", "description"} {
+	for _, k := range []string{"file_path", "path", "AbsolutePath", "TargetFile", "command", "CommandLine", "pattern", "query", "url", "description"} {
 		if v, ok := in[k].(string); ok && v != "" {
 			v = strings.Join(strings.Fields(v), " ")
 			if r := []rune(v); len(r) > 120 {

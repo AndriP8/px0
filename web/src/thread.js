@@ -1,7 +1,7 @@
 // web/src/thread.js
 import { $, $$, esc, doc_, api, apiPost, apiPostJson, applyKeyLabels } from './state.js';
 import { on } from './bus.js';
-import { showToast } from './ui.js';
+import { showToast, copyToClipboard } from './ui.js';
 import { openFile } from './tabs.js';
 import { setThreadHandler, hideSelectionBar } from './selbar.js';
 import { showRightInspector } from './inspector.js';
@@ -47,37 +47,305 @@ function thrDur(ms) {
   return ms < 1000 ? ms + 'ms' : ms < 60000 ? (ms / 1000).toFixed(1) + 's' : Math.floor(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's';
 }
 
-/* ---------- a small, safe Markdown subset for replies ----------
-   Everything is escaped first; only fences, inline code, bold and bullet lists
-   are then recognised, so a reply can never inject markup. */
-function thrInline(s) {
-  const h = /^#{1,6}\s+(.*)$/.exec(s);
-  if (h) s = '**' + h[1] + '**';
-  return esc(s).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+/* ---------- Markdown renderer for thread messages ----------
+   Safe, streaming-friendly Markdown rendering supporting headings, code fences
+   with syntax badge and copy button, blockquotes with GitHub alerts, ordered and
+   unordered lists with task checkboxes and nesting, tables, links (with local file
+   navigation), autolinks, images, horizontal rules, and inline styling. */
+function thrSafeUrl(u) {
+  u = u.trim();
+  if (/^(?:https?|mailto):/i.test(u)) return esc(u);
+  if (/^[a-zA-Z0-9_\-./]+(?::\d+)?(?:#.*)?$/.test(u)) return esc(u);
+  if (u.startsWith('#')) return esc(u);
+  return '';
+}
+
+function thrInline(src) {
+  if (!src) return '';
+  const codes = [];
+  // 1. Extract inline code spans first so nothing inside is formatted
+  let s = src.replace(/(`+)([\s\S]*?[^`])\1(?!`)/g, (_, q, code) => {
+    codes.push('<code>' + esc(code.trim()) + '</code>');
+    return '%%PXCODE' + (codes.length - 1) + '%%';
+  });
+
+  // Escape HTML in the remaining text
+  s = esc(s);
+
+  // 2. Bold, italic, strikethrough
+  s = s.replace(/(\*\*\*|___)([^\n]+?)\1/g, '<strong><em>$2</em></strong>');
+  s = s.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/(^|[^a-zA-Z0-9])__([^\n]+?)__(?![a-zA-Z0-9])/g, '$1<strong>$2</strong>');
+  s = s.replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
+  s = s.replace(/(^|[^a-zA-Z0-9])_([^\n]+?)_(?![a-zA-Z0-9])/g, '$1<em>$2</em>');
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+  // 3. Links & images (use placeholders so bare autolinks do not match inside href/src attributes)
+  const links = [];
+  const pushLink = html => {
+    links.push(html);
+    return '%%PXLINK' + (links.length - 1) + '%%';
+  };
+
+  // Images: ![alt](url)
+  s = s.replace(/!\[([^\]]*)\]\(((?:[^()]+|\([^()]*\))*)\)/g, (_, alt, url) => {
+    const u = thrSafeUrl(url);
+    return u ? pushLink(`<img src="${u}" alt="${esc(alt)}" class="thr-img" />`) : esc(alt);
+  });
+
+  // Links: [text](url)
+  s = s.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))*)\)/g, (_, text, url) => {
+    const u = thrSafeUrl(url);
+    if (!u) return text;
+    const m = /^([a-zA-Z0-9_.\-/]+\.[a-zA-Z0-9]+)(?::(\d+))?$/.exec(url.trim());
+    if (m && !url.includes('://')) {
+      return pushLink(`<a href="#" class="thr-link" data-path="${esc(m[1])}"` + (m[2] ? ` data-line="${m[2]}"` : '') + `>${text}</a>`);
+    }
+    return pushLink(`<a href="${u}" target="_blank" rel="noopener noreferrer">${text}</a>`);
+  });
+
+  // 4. Bracketed autolinks: <https://...>
+  s = s.replace(/&lt;(https?:\/\/[^&>]+)&gt;/g, (_, url) => {
+    const u = thrSafeUrl(url);
+    return u ? pushLink(`<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`) : url;
+  });
+
+  // 5. Bare autolinks
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, prefix, url) => {
+    let trailing = '';
+    const m = /[.,:;?!]+$/.exec(url);
+    if (m) {
+      trailing = m[0];
+      url = url.slice(0, -trailing.length);
+    }
+    const u = thrSafeUrl(url);
+    return u ? `${prefix}` + pushLink(`<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`) + trailing : prefix + url + trailing;
+  });
+
+  // 6. Restore links & codes
+  s = s.replace(/%%PXLINK(\d+)%%/g, (_, idx) => links[+idx]);
+  s = s.replace(/%%PXCODE(\d+)%%/g, (_, idx) => codes[+idx]);
+
+  return s;
 }
 
 function thrMd(src) {
-  const parts = src.split('```');
+  if (!src) return '';
+  const lines = src.replace(/\r\n?/g, '\n').split('\n');
   let html = '';
-  parts.forEach((part, i) => {
-    if (i % 2) {
-      // The first line of a fence is its language, unless the fence has none.
-      const nl = part.indexOf('\n');
-      const body = nl >= 0 && /^[\w+#.-]*$/.test(part.slice(0, nl).trim()) ? part.slice(nl + 1) : part;
-      html += '<pre><code>' + esc(body.replace(/\n$/, '')) + '</code></pre>';
-      return;
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+
+    // Fenced code block: ``` or ~~~
+    const fenceMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[2][0];
+      const markerLen = fenceMatch[2].length;
+      const rawLang = fenceMatch[3].trim().split(/\s+/)[0] || '';
+      const lang = /^[\w+#.-]+$/.test(rawLang) ? rawLang : '';
+      const codeLines = [];
+      i++;
+      while (i < lines.length) {
+        const endMatch = new RegExp('^( {0,3})' + marker + '{' + markerLen + ',}\\s*$').exec(lines[i]);
+        if (endMatch) { i++; break; }
+        codeLines.push(lines[i]);
+        i++;
+      }
+      const code = esc(codeLines.join('\n'));
+      html += `<div class="thr-pre"` + (lang ? ` data-lang="${esc(lang)}"` : '') + `><pre><code>` + code + `</code></pre><button class="thr-copy" title="Copy code" aria-label="Copy code"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5V3a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg></button></div>`;
+      continue;
     }
-    for (const block of part.split(/\n{2,}/)) {
-      const b = block.replace(/^\n+|\n+$/g, '');
-      if (!b.trim()) continue;
-      const lines = b.split('\n');
-      if (lines.every(l => /^\s*[-*] /.test(l))) {
-        html += '<ul>' + lines.map(l => '<li>' + thrInline(l.replace(/^\s*[-*] /, '')) + '</li>').join('') + '</ul>';
-      } else {
-        html += '<p>' + lines.map(thrInline).join('<br>') + '</p>';
+
+    // Heading: #{1,6}
+    const hMatch = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (hMatch) {
+      const level = hMatch[1].length;
+      html += `<h${level}>` + thrInline(hMatch[2]) + `</h${level}>`;
+      i++;
+      continue;
+    }
+
+    // Horizontal rule: ---, ***, ___
+    if (/^( {0,3})([-*_])(?:\s*\2){2,}\s*$/.test(line)) {
+      html += '<hr>';
+      i++;
+      continue;
+    }
+
+    // Blockquote: >
+    if (/^( {0,3})>(?: (.*)|(.*))$/.test(line)) {
+      const qLines = [];
+      while (i < lines.length) {
+        const qm = /^( {0,3})>(?: (.*)|(.*))$/.exec(lines[i]);
+        if (qm) {
+          qLines.push(qm[2] !== undefined ? qm[2] : qm[3] || '');
+          i++;
+        } else if (lines[i].trim() && !/^( {0,3})([#`~*-]|\d+\.)/.test(lines[i])) {
+          qLines.push(lines[i]);
+          i++;
+        } else {
+          break;
+        }
+      }
+      let alertClass = '';
+      let alertTitle = '';
+      if (qLines.length > 0) {
+        const am = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i.exec(qLines[0]);
+        if (am) {
+          const kind = am[1].toLowerCase();
+          const titles = { note: 'Note', tip: 'Tip', important: 'Important', warning: 'Warning', caution: 'Caution' };
+          alertClass = ' thr-alert thr-alert-' + kind;
+          alertTitle = `<p class="thr-alert-title">${titles[kind]}</p>`;
+          qLines.shift();
+        }
+      }
+      const inner = thrMd(qLines.join('\n'));
+      html += `<blockquote class="${alertClass}">${alertTitle}${inner}</blockquote>`;
+      continue;
+    }
+
+    // Table
+    if (line.includes('|') && i + 1 < lines.length) {
+      const nextLine = lines[i + 1];
+      const isDelim = /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/.test(nextLine);
+      if (isDelim) {
+        const splitRow = r => {
+          let s = r.trim();
+          if (s.startsWith('|')) s = s.slice(1);
+          if (s.endsWith('|')) s = s.slice(0, -1);
+          return s.split('|').map(c => c.trim());
+        };
+        const headers = splitRow(line);
+        const delims = splitRow(nextLine);
+        const aligns = delims.map(d => {
+          const left = d.startsWith(':');
+          const right = d.endsWith(':');
+          if (left && right) return 'center';
+          if (right) return 'right';
+          if (left) return 'left';
+          return '';
+        });
+        i += 2;
+        const rows = [];
+        while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+          rows.push(splitRow(lines[i]));
+          i++;
+        }
+        let tbl = '<table><thead><tr>';
+        headers.forEach((h, col) => {
+          const align = aligns[col] ? ` style="text-align:${aligns[col]}"` : '';
+          tbl += `<th${align}>${thrInline(h)}</th>`;
+        });
+        tbl += '</tr></thead><tbody>';
+        rows.forEach(r => {
+          tbl += '<tr>';
+          headers.forEach((_, col) => {
+            const val = r[col] || '';
+            const align = aligns[col] ? ` style="text-align:${aligns[col]}"` : '';
+            tbl += `<td${align}>${thrInline(val)}</td>`;
+          });
+          tbl += '</tr>';
+        });
+        tbl += '</tbody></table>';
+        html += tbl;
+        continue;
       }
     }
-  });
+
+    // List: unordered (*, -, +) or ordered (1.)
+    const listMatch = /^( *)([-*+]|\d+[.)]) +(.*)$/.exec(line);
+    if (listMatch) {
+      const listStack = [];
+      while (i < lines.length) {
+        const l = lines[i];
+        if (!l.trim()) {
+          let j = i + 1;
+          while (j < lines.length && !lines[j].trim()) j++;
+          if (j < lines.length && /^( *)([-*+]|\d+[.)]) +(.*)$/.test(lines[j])) {
+            i++;
+            continue;
+          }
+          break;
+        }
+
+        const itemMatch = /^( *)([-*+]|\d+[.)]) +(.*)$/.exec(l);
+        if (itemMatch) {
+          const indent = itemMatch[1].length;
+          const marker = itemMatch[2];
+          const isOrdered = /^\d/.test(marker);
+          const type = isOrdered ? 'ol' : 'ul';
+          let itemText = itemMatch[3];
+
+          let taskInput = '';
+          const taskMatch = /^\[([ xX])\] +(.*)$/.exec(itemText);
+          if (taskMatch) {
+            const checked = taskMatch[1].toLowerCase() === 'x';
+            taskInput = `<input type="checkbox" disabled${checked ? ' checked' : ''}> `;
+            itemText = taskMatch[2];
+          }
+
+          while (listStack.length && indent < listStack[listStack.length - 1].indent) {
+            const popped = listStack.pop();
+            html += `</li></${popped.type}>`;
+          }
+
+          if (!listStack.length || indent > listStack[listStack.length - 1].indent) {
+            html += `<${type}><li class="${taskInput ? 'thr-task-item' : ''}">` + taskInput + thrInline(itemText);
+            listStack.push({ type, indent });
+          } else {
+            if (listStack[listStack.length - 1].type !== type) {
+              const popped = listStack.pop();
+              html += `</li></${popped.type}><${type}>`;
+              listStack.push({ type, indent });
+            } else {
+              html += `</li><li class="${taskInput ? 'thr-task-item' : ''}">` + taskInput + thrInline(itemText);
+            }
+          }
+          i++;
+        } else {
+          const indentMatch = /^( *)/.exec(l);
+          const isIndented = indentMatch[1].length > listStack[listStack.length - 1].indent;
+          if (isIndented && !/^( {0,3})([`~]{3,}|#{1,6}\s|>)/.test(l)) {
+            html += '<br>' + thrInline(l.trim());
+            i++;
+          } else if (!isIndented && !/^( {0,3})([#`~>]|[-*_]{3,})/.test(l) && !l.includes('|')) {
+            html += '<br>' + thrInline(l.trim());
+            i++;
+          } else {
+            break;
+          }
+        }
+      }
+
+      while (listStack.length) {
+        const popped = listStack.pop();
+        html += `</li></${popped.type}>`;
+      }
+      continue;
+    }
+
+    // Paragraph: collect lines until blank line or block start
+    const pLines = [];
+    while (i < lines.length) {
+      const l = lines[i];
+      if (!l.trim()) break;
+      if (/^( {0,3})(`{3,}|~{3,})/.test(l)) break;
+      if (/^#{1,6}\s+/.test(l)) break;
+      if (/^( {0,3})([-*_])(?:\s*\2){2,}\s*$/.test(l)) break;
+      if (/^( {0,3})>/.test(l)) break;
+      if (/^( *)([-*+]|\d+[.)]) +/.test(l)) break;
+      if (l.includes('|') && i + 1 < lines.length && /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/.test(lines[i + 1])) break;
+
+      pLines.push(l);
+      i++;
+    }
+    if (pLines.length) {
+      html += '<p>' + pLines.map(thrInline).join('<br>') + '</p>';
+    }
+  }
   return html;
 }
 
@@ -352,6 +620,18 @@ export function initThreads() {
     if (p) openFile(p, { line: +thrEl.anchor.dataset.line || 1 });
   });
   thrEl.msgs.addEventListener('click', e => {
+    const cp = /** @type {HTMLElement|null} */ (e.target)?.closest('.thr-copy');
+    if (cp) {
+      const code = cp.closest('.thr-pre')?.querySelector('code')?.textContent || '';
+      if (code) copyToClipboard(code, 'Copied code', cp);
+      return;
+    }
+    const link = /** @type {HTMLElement|null} */ (e.target)?.closest('a.thr-link');
+    if (link && link.dataset.path) {
+      e.preventDefault();
+      openFile(link.dataset.path, { line: +link.dataset.line || 1 });
+      return;
+    }
     const f = /** @type {HTMLElement|null} */ (e.target)?.closest('.thr-file');
     if (f) openFile(f.dataset.path);
   });

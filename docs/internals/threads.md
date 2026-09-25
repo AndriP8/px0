@@ -41,7 +41,7 @@ A turn is a fresh process, so continuity is carried one of two ways:
 
 | Mode | Harnesses | How |
 | --- | --- | --- |
-| Native session | `claude`, `cursor-agent` | px0 owns the session id. claude: `--session-id <uuid>` on the first turn, `--resume <uuid>` after. cursor-agent: `create-chat` returns an id, then `--resume <id>` every turn. The harness keeps its own context, so a later turn sends only the new message. |
+| Native session | `claude`, `cursor-agent`, `agy`, `gemini` | px0 owns or tracks the session id. `claude`: `--session-id <uuid>` on the first turn, `--resume <uuid>` after. `agy`: captures `conversation_id` on first turn, then `--conversation <id>` every turn. `gemini`: `--session-id <uuid>` on first turn, `--resume <uuid>` after. `cursor-agent`: `create-chat` returns an id, then `--resume <id>` every turn. The harness keeps its own context, so a later turn sends only the new message. |
 | Replay | every other harness | Each turn's prompt carries the earlier turns as `User:` / `Assistant:` text, plus the files each turn changed, capped at `threadReplayMax` bytes (most recent kept). |
 
 `threadArgv` injects the session flags right after the binary (flag order does not matter to these CLIs), so the preset argv, including the model flag and permission mode, is unchanged. Only harnesses whose flags were verified are in the native list; adding one is a case in `threadArgv` and `threadNative`.
@@ -49,19 +49,18 @@ A turn is a fresh process, so continuity is carried one of two ways:
 Two rules keep this honest:
 
 - **A session belongs to the harness that made it.** `SessionHarness` records the owner. Switching harness mid-thread clears the session, and the new harness is primed by replay.
-- **Only a live session is trusted.** `SessionLive` is set once the harness has really started the session (claude reported a `session_id`, or cursor-agent finished a turn). If a first turn failed before that, the next turn replays instead of resuming a session that may not exist.
+- **Only a live session is trusted.** `SessionLive` is set once the harness has really started the session (claude/agy/gemini reported a session id, or cursor-agent finished a turn). If a first turn failed before that, the next turn replays instead of resuming a session that may not exist.
 
 The anchor and ground rules ("you may read and edit any file, reply with a concise summary") go into the prompt only when the harness has no memory of them: the first turn, or a replay.
 
 ## 3. Output and Streaming
 
-`claude` is run with `--output-format stream-json --verbose`. `threadSink` reads it line by line through `parseClaudeEvent`:
+`claude`, `agy`, and `gemini` are run with `--output-format stream-json`. `threadSink` reads stdout line by line and dispatches to harness-specific parsers:
 
-- `assistant` text blocks are appended to the reply, each set off from the last by a blank line.
-- `assistant` `tool_use` blocks become a one-line step such as `Edit calc.go` (`toolLabel`).
-- a `result` with `is_error` fails the turn; a successful `result` fills the reply only if no text arrived.
-
-Events arrive per assistant message, not per token. Every other harness has its stdout treated as the reply, line by line. stderr goes to a `tailBuffer` and is appended to the error only when the turn failed with no reply.
+- `claude` (`parseClaudeEvent`): assistant text blocks and tool uses (`toolLabel`).
+- `agy` (`parseAgyEvent`): `step_update` text deltas stream tokens live; `step_update` tool calls stream step labels in real time.
+- `gemini` (`parseGeminiEvent`): assistant message deltas stream tokens live; `tool_use` events stream step labels in real time.
+- Every other harness has its stdout treated as the reply, line by line. stderr goes to a `tailBuffer` and is appended to the error only when the turn failed with no reply.
 
 The feed is Server-Sent Events at `/api/threads/stream`:
 
