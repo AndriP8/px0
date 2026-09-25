@@ -163,7 +163,7 @@ A harness routinely edits files nobody pointed it at, so the set of touched file
 
 `worktreeSnapshot` is `gitStatus` with each listed file's size and modification time folded into its entry. Status alone misses the most common case in review: editing a file that is already modified reads `M` before and after, so the edit would go unseen and nothing would reload. Clean files are not stamped; a change to one surfaces through status on its own.
 
-That set drives the reload and the summary shown to the user.
+That set drives the reload and the summary shown to the user. It is sorted by path, since both snapshots are maps and Go randomises their iteration order: without the sort, the same run could list its files differently each time.
 
 Outside a git repository there is no status to compare, so the job reports `tracked: false` and an empty change list. The client treats that as "unknown" rather than "nothing" and reloads the workspace regardless.
 
