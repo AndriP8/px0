@@ -246,6 +246,7 @@ func main() {
 	err = srv.Serve(ln)
 	lsp.Close()
 	agent.Close()
+	pxSrv.CloseThreads()
 	pr.Close()
 
 	if interrupted {

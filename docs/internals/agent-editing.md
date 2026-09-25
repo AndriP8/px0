@@ -231,5 +231,5 @@ The explicit first-run pick matters for the same reason. Auto-enabling on discov
 - The job keeps the last 32 KB of each of stdout and stderr (`tailBuffer`), enough to explain a failure without holding a full transcript.
 - A run is abandoned after 10 minutes.
 - Changes to gitignored files are invisible to `git status`, so they are never reloaded.
-- Instructions live in memory for the life of the process. Only the harness choice is persisted, and never inside a workspace.
+- Inline edit instructions live in memory for the life of the process. Only the harness choice is persisted, and never inside a workspace. Conversations that should persist are [threads](threads.md).
 - Leaving the tab while an edit is in flight is guarded by a `beforeunload` prompt, but closing the browser process outright or losing power still abandons the harness mid-run with no undo to fall back on.

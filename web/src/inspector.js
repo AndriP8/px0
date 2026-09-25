@@ -1,5 +1,6 @@
 // web/src/inspector.js
 import { $, $$, esc, S, doc_, api } from './state.js';
+import { emit } from './bus.js';
 import { layout, render } from './renderer.js';
 import { updateStatus, setStatusNote } from './status.js';
 import { openFile, centerLine } from './tabs.js';
@@ -29,6 +30,8 @@ export function setRightInspectorTab(tab) {
   $('#pane-right-symbols')?.classList.toggle('active', tab === 'symbols');
   $('#pane-right-calls')?.classList.toggle('active', tab === 'calls');
   $('#pane-right-search')?.classList.toggle('active', tab === 'search');
+  $('#pane-right-threads')?.classList.toggle('active', tab === 'threads');
+  if (tab === 'threads') emit('threads:shown');
   if (tab === 'symbols') {
     loadOutline();
     $('#right-symbols-filter')?.focus();

@@ -613,6 +613,17 @@ func (m *agentManager) Model() string {
 	return m.models[m.selected]
 }
 
+// current returns the selected harness, its headless argv and its model, read
+// together so a run never mixes one harness's name with another's flags.
+func (m *agentManager) current() (string, []string, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.args == nil {
+		return "", nil, ""
+	}
+	return m.selected, append([]string(nil), m.args...), m.models[m.selected]
+}
+
 func (m *agentManager) Pinned() bool {
 	if m == nil {
 		return false

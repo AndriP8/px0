@@ -16,6 +16,7 @@ import { togglePreview } from './markdown.js';
 import { openSettings } from './settings.js';
 import { showVimHelp, isVimEnabled, setVimModeEnabled } from './vim.js';
 import { launchPR } from './pr.js';
+import { newThread } from './thread.js';
 
 export const overlay = $('#overlay');
 export const palInput = $('#pal');
@@ -49,6 +50,8 @@ export const COMMANDS = [
   { name: 'Close Tab', run: () => { if (S.active >= 0) closeTab(S.active); } },
   { name: 'Close All Tabs', run: () => { while (S.tabs.length) closeTab(0); } },
   { name: withKeys('Reopen Closed Tab ({Alt+Shift+T})'), run: () => reopenClosedTab() },
+  { name: 'Threads: Show All', run: () => showRightInspector('threads') },
+  { name: withKeys('Threads: Start New Thread ({Alt+T} on a selection)'), run: () => newThread(null) },
   { name: 'Git: Open Pull Request…', run: () => openPalette('openpr', '') },
   { name: 'Preferences: Toggle Vim Keybindings', run: () => setVimModeEnabled(!isVimEnabled(), true) },
   { name: 'Help: Vim Keybindings Cheat Sheet', run: showVimHelp },

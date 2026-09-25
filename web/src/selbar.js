@@ -16,13 +16,17 @@ const statsEl = $('#sel-stats');
 const diffviewEl = $('#diffview');
 
 // e.code, not e.key: Option+letter types a symbol on macOS.
-export const SEL_KEYS = { KeyC: 'copy-ref', KeyA: 'copy-agent', KeyU: 'usages', KeyE: 'agent-edit', KeyR: 'review-comment' };
+export const SEL_KEYS = { KeyC: 'copy-ref', KeyA: 'copy-agent', KeyU: 'usages', KeyE: 'agent-edit', KeyR: 'review-comment', KeyT: 'thread' };
 
 /* Editing lives in agent.js, which registers itself here on load. Keeping the
    dependency one-way means selbar imports nothing back and the two never form
    a cycle; the button simply does nothing when no harness is configured. */
 let agentHandler = null;
 export function setAgentHandler(fn) { agentHandler = fn; }
+
+/* Threads (thread.js) hook in the same way. */
+let threadHandler = null;
+export function setThreadHandler(fn) { threadHandler = fn; }
 
 /* Same one-way registration for PR review comments (pr.js), active only in a
    `px0 pr ...` session. */
@@ -184,6 +188,14 @@ export function copySelectAll() {
    bar is not showing, so a shortcut can fall through to the browser. */
 export function runSelectionAction(act, triggerBtn = null) {
   if (!current) {
+    if (act === 'thread') {
+      const d = doc_();
+      if (d && threadHandler) {
+        const line = d.cur || 1;
+        threadHandler({ text: (d.lines && d.lines[line - 1]) || '', l1: line, l2: line, path: d.path });
+        return true;
+      }
+    }
     if (act === 'agent-edit') {
       const d = doc_();
       if (d && agentHandler) {
@@ -208,6 +220,9 @@ export function runSelectionAction(act, triggerBtn = null) {
   } else if (act === 'agent-edit') {
     if (!agentHandler) return false;
     agentHandler(current);
+  } else if (act === 'thread') {
+    if (!threadHandler) return false;
+    threadHandler(current);
   } else if (act === 'review-comment') {
     if (!reviewHandler) return false;
     reviewHandler(current);
@@ -233,6 +248,7 @@ export const SEL_MENU_ITEMS = [
   { sel: 'copy-ref', label: 'Copy Ref', keys: 'Alt+C' },
   { sel: 'copy-agent', label: 'Copy with Context', keys: 'Alt+A' },
   { sel: 'agent-edit', label: 'Edit Inline', keys: 'Alt+E' },
+  { sel: 'thread', label: 'Start Thread', keys: 'Alt+T' },
   { sel: 'usages', label: 'Find Usages', keys: 'Alt+U' },
 ];
 

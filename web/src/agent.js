@@ -54,10 +54,25 @@ const chosenModel = () => (S.meta && S.meta.agentModel) || '';
 const targetRef = ({ path, l1, l2 }) => path + ':' + (l1 === l2 ? l1 : l1 + '-' + l2);
 const rangesOverlap = (a, b) => a.path === b.path && a.l1 <= b.l2 && b.l1 <= a.l2;
 
+// Harness/model selects owned by other panels (the thread composer). They
+// show the same global selection as every composer box and write it back.
+const extraPickers = new Set();
+export function registerAgentPicker(picker) {
+  extraPickers.add(picker);
+  picker.harnessSelect.addEventListener('change', () => {
+    if (picker.harnessSelect.value) select(picker.harnessSelect.value, msg => showToast('!', msg));
+  });
+  picker.modelSelect.addEventListener('change', () => {
+    select(picker.harnessSelect.value || chosen(), picker.modelSelect.value, msg => showToast('!', msg));
+  });
+  updateSessionMeta(picker);
+}
+
 export function applyAgentMeta() {
   for (const session of sessions.values()) {
     updateSessionMeta(session);
   }
+  for (const picker of extraPickers) updateSessionMeta(picker);
   syncBatchMeta();
   syncGitPanelMeta();
 }
